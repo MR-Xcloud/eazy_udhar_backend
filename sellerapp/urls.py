@@ -17,8 +17,11 @@ from .views.report_views import (
 )
 from .views.seller_views import (
     AddCreditView,
+    AdvanceDepositView,
+    AdvanceUseView,
     BusinessView,
     CallLogView,
+    CustomerAdvanceView,
     CustomerFilesView,
     CustomerMessagesView,
     CustomerNotesView,
@@ -60,6 +63,11 @@ urlpatterns = [
         name='seller-customer-transactions',
     ),
     path(
+        'seller/customers/<uuid:customer_id>/advance',
+        CustomerAdvanceView.as_view(),
+        name='seller-customer-advance',
+    ),
+    path(
         'seller/customers/<uuid:customer_id>/notes',
         CustomerNotesView.as_view(),
         name='seller-customer-notes',
@@ -94,6 +102,16 @@ urlpatterns = [
         'seller/transactions/credit',
         AddCreditView.as_view(),
         name='seller-transaction-credit',
+    ),
+    path(
+        'seller/transactions/advance-deposit',
+        AdvanceDepositView.as_view(),
+        name='seller-transaction-advance-deposit',
+    ),
+    path(
+        'seller/transactions/advance-use',
+        AdvanceUseView.as_view(),
+        name='seller-transaction-advance-use',
     ),
     path(
         'seller/transactions',

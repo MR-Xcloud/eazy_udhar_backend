@@ -72,6 +72,8 @@ class CustomerAccount(models.Model):
         related_name='customer_accounts',
     )
     outstanding_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    advance_deposited = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    advance_used = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     next_due_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     has_balance = models.BooleanField(default=True)
@@ -90,6 +92,10 @@ class CustomerAccount(models.Model):
         if self.next_due_date and self.has_balance:
             return self.next_due_date < timezone.now().date()
         return False
+
+    @property
+    def advance_balance(self):
+        return self.advance_deposited - self.advance_used
 
 
 class AccountStatementLine(models.Model):
@@ -179,12 +185,14 @@ class CustomerNotification(models.Model):
     TYPE_GENERAL = 'general'
     TYPE_MESSAGE = 'message'
     TYPE_CREDIT = 'credit'
+    TYPE_ADVANCE = 'advance'
     TYPE_CHOICES = [
         (TYPE_REMINDER, 'Reminder'),
         (TYPE_PAYMENT, 'Payment'),
         (TYPE_GENERAL, 'General'),
         (TYPE_MESSAGE, 'Message'),
         (TYPE_CREDIT, 'Credit'),
+        (TYPE_ADVANCE, 'Advance'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

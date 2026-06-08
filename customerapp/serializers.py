@@ -199,6 +199,16 @@ class CustomerAccountSerializer(serializers.ModelSerializer):
     )
     due_date = serializers.DateField(source='next_due_date', allow_null=True)
     overdue = serializers.SerializerMethodField()
+    advance = serializers.SerializerMethodField()
+    total_deposited = serializers.SerializerMethodField()
+    total_used = serializers.SerializerMethodField()
+    remaining = serializers.SerializerMethodField()
+    advance_deposited = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    advance_used = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    advance_balance = serializers.SerializerMethodField()
+    deposited = serializers.SerializerMethodField()
+    used = serializers.SerializerMethodField()
+    balance_available = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomerAccount
@@ -213,10 +223,49 @@ class CustomerAccountSerializer(serializers.ModelSerializer):
             'status',
             'has_balance',
             'overdue',
+            'advance',
+            'total_deposited',
+            'total_used',
+            'remaining',
+            'advance_deposited',
+            'advance_used',
+            'advance_balance',
+            'deposited',
+            'used',
+            'balance_available',
         ]
 
     def get_overdue(self, obj):
         return obj.is_overdue
+
+    def _advance_payload(self, obj):
+        from sellerapp.services import advance_summary
+
+        return advance_summary(obj)
+
+    def get_advance(self, obj):
+        return self._advance_payload(obj)
+
+    def get_total_deposited(self, obj):
+        return float(obj.advance_deposited)
+
+    def get_total_used(self, obj):
+        return float(obj.advance_used)
+
+    def get_remaining(self, obj):
+        return float(obj.advance_balance)
+
+    def get_advance_balance(self, obj):
+        return float(obj.advance_balance)
+
+    def get_deposited(self, obj):
+        return float(obj.advance_deposited)
+
+    def get_used(self, obj):
+        return float(obj.advance_used)
+
+    def get_balance_available(self, obj):
+        return float(obj.advance_balance)
 
 
 class StatementLineSerializer(serializers.ModelSerializer):

@@ -69,6 +69,8 @@ class SellerCustomer(models.Model):
     state = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100, blank=True, default='India')
     outstanding_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    advance_deposited = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    advance_used = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
     linked_customer = models.ForeignKey(
         'customerapp.Customer',
@@ -101,13 +103,21 @@ class SellerCustomer(models.Model):
     def is_overdue(self):
         return self.status == self.STATUS_OVERDUE
 
+    @property
+    def advance_balance(self):
+        return self.advance_deposited - self.advance_used
+
 
 class LedgerTransaction(models.Model):
     TYPE_CREDIT = 'credit_added'
     TYPE_PAYMENT = 'payment_received'
+    TYPE_ADVANCE_DEPOSIT = 'advance_deposit'
+    TYPE_ADVANCE_USE = 'advance_use'
     TYPE_CHOICES = [
         (TYPE_CREDIT, 'Credit Added'),
         (TYPE_PAYMENT, 'Payment Received'),
+        (TYPE_ADVANCE_DEPOSIT, 'Advance Deposit'),
+        (TYPE_ADVANCE_USE, 'Advance Use'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -250,6 +260,35 @@ class SellerNotification(models.Model):
         read = 'read' if self.is_read else 'unread'
         customer = self.seller_customer.name if self.seller_customer_id else 'General'
         return f'{self.seller.business_name} — [{self.notification_type}] {customer}: {self.title} ({read})'
+
+
+class CustomerDayDigest(models.Model):
+    """One nightly SMS per customer per day; token opens that day's statement page."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    seller_customer = models.ForeignKey(
+        SellerCustomer,
+        on_delete=models.CASCADE,
+        related_name='day_digests',
+    )
+    activity_date = models.DateField()
+    credit_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    payment_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    transaction_count = models.PositiveIntegerField(default=0)
+    sms_sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['seller_customer', 'activity_date']]
+        ordering = ['-activity_date']
+
+    def __str__(self):
+        return (
+            f'{self.seller_customer.name} — {self.activity_date} '
+            f'({self.transaction_count} txns)'
+        )
 
 
 class SellerDeviceToken(models.Model):

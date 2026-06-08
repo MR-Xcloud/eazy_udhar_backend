@@ -34,6 +34,7 @@ from ..serializers import (
     StatementLineSerializer,
 )
 from ..services import dashboard_summary, payment_summary, process_payment
+from sellerapp.services import advance_summary
 from ..utils import customer_to_dict
 
 
@@ -65,6 +66,14 @@ class CustomerAccountsView(APIView):
                 pass
         serializer = CustomerAccountSerializer(qs, many=True)
         return Response({'accounts': serializer.data})
+
+
+class CustomerAccountAdvanceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, shop_id):
+        account = get_object_or_404(CustomerAccount, id=shop_id, user=request.user)
+        return Response({'advance': advance_summary(account)})
 
 
 class AccountStatementView(APIView):

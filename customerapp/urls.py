@@ -14,6 +14,7 @@ from .views.auth_views import (
 from .views.customer_views import (
     AccountStatementView,
     ChatView,
+    CustomerAccountAdvanceView,
     CustomerAccountsView,
     CustomerDashboardView,
     CustomerFcmTokenView,
@@ -44,6 +45,11 @@ urlpatterns = [
     path('customer/me', CustomerMeView.as_view(), name='customer-me'),
     path('customer/dashboard', CustomerDashboardView.as_view(), name='customer-dashboard'),
     path('customer/accounts', CustomerAccountsView.as_view(), name='customer-accounts'),
+    path(
+        'customer/accounts/<uuid:shop_id>/advance',
+        CustomerAccountAdvanceView.as_view(),
+        name='customer-account-advance',
+    ),
     path(
         'customer/notifications/unread-count',
         UnreadNotificationCountView.as_view(),

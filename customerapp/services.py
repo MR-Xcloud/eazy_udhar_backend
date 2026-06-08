@@ -15,7 +15,12 @@ from .models import (
 
 def dashboard_summary(user):
     accounts = CustomerAccount.objects.filter(user=user, has_balance=True)
+    all_accounts = CustomerAccount.objects.filter(user=user)
     total_outstanding = accounts.aggregate(total=Sum('outstanding_amount'))['total'] or Decimal('0')
+    total_advance_remaining = sum(
+        (a.advance_balance for a in all_accounts),
+        Decimal('0'),
+    )
     shop_count = accounts.count()
     overdue_accounts = [a for a in accounts if a.is_overdue]
     pay_now_amount = sum((a.outstanding_amount for a in overdue_accounts), Decimal('0'))
@@ -24,6 +29,7 @@ def dashboard_summary(user):
     return {
         'name': user.full_name or user.email,
         'total_outstanding': str(total_outstanding),
+        'total_advance_remaining': str(total_advance_remaining),
         'shop_count': shop_count,
         'pay_now_amount': str(pay_now_amount),
     }

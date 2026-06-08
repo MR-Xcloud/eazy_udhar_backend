@@ -201,10 +201,17 @@ NIMBUS_PAYMENT_SMS_TEXT = os.environ.get(
     'NIMBUS_PAYMENT_SMS_TEXT',
     'Payment of Rs. {#var#} credited to your account by {#var#} Check Balance and Details on {#var#} - EAZYUDHAR by INWIZY',
 ).strip()
-# Third {#var#} in both templates — platform name shown after "Check Balance and Details on"
+# Third {#var#} in nightly digest SMS — customer's day-statement link (not truncated).
+PUBLIC_STATEMENT_BASE_URL = os.environ.get(
+    'PUBLIC_STATEMENT_BASE_URL',
+    'https://eazy-udhar-backend.onrender.com',
+).strip().rstrip('/')
+# Per-txn SMS replaced by nightly digest; third {#var#} is statement URL on credit/payment templates.
 NIMBUS_SMS_PLATFORM_NAME = os.environ.get('NIMBUS_SMS_PLATFORM_NAME', 'EAZYUDHAR').strip()
-# DLT: each {#var#} value is often max 30 chars — we truncate in code if longer.
+# DLT: shop name / amount vars are often max 30 chars — we truncate in code if longer.
 NIMBUS_SMS_VAR_MAX_LENGTH = int(os.environ.get('NIMBUS_SMS_VAR_MAX_LENGTH', '30'))
+# Statement link in SMS: 0 = do not truncate (full URL in third {#var#}).
+NIMBUS_SMS_LINK_VAR_MAX_LENGTH = int(os.environ.get('NIMBUS_SMS_LINK_VAR_MAX_LENGTH', '0'))
 # Mobile: 10-digit local, or set prefix e.g. 91 -> sends 917579320174 (try if all msgs fail delivery).
 NIMBUS_MOBILE_PREFIX = os.environ.get('NIMBUS_MOBILE_PREFIX', '').strip()
 # DLT route — match Nimbus portal: Category = Service, Sub Category = Implicit
@@ -213,3 +220,29 @@ NIMBUS_SMS_SUB_CATEGORY = os.environ.get('NIMBUS_SMS_SUB_CATEGORY', 'implicit').
 # Optional extra API keys if Nimbus support asks for different names (e.g. smstype=SI)
 NIMBUS_SMS_EXTRA_PARAMS = os.environ.get('NIMBUS_SMS_EXTRA_PARAMS', '').strip()
 NIMBUS_REQUEST_TIMEOUT = int(os.environ.get('NIMBUS_REQUEST_TIMEOUT', '30'))
+
+# --- Production / Render (admin login CSRF, HTTPS behind proxy) ---
+_render_hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME', '').strip()
+_csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
+
+csrf_trusted_origins = [
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'https://eazy-udhar-backend.onrender.com',
+]
+if _render_hostname:
+    csrf_trusted_origins.append(f'https://{_render_hostname}')
+if _csrf_origins_env:
+    csrf_trusted_origins.extend(
+        origin.strip()
+        for origin in _csrf_origins_env.split(',')
+        if origin.strip()
+    )
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(csrf_trusted_origins))
+
+if os.environ.get('RENDER') or _render_hostname:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = True
+    if _render_hostname and _render_hostname not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS = ['*', _render_hostname]

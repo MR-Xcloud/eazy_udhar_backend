@@ -24,6 +24,8 @@ from ..models import (
 from ..permissions import IsSeller
 from ..serializers import (
     AddCreditSerializer,
+    AdvanceDepositSerializer,
+    AdvanceUseSerializer,
     BusinessProfileSerializer,
     FcmTokenSerializer,
     ReceivePaymentSerializer,
@@ -37,11 +39,14 @@ from ..serializers import (
 from ..services import (
     activity_item,
     add_credit,
+    advance_summary,
     customer_detail,
     customer_list_item,
     dashboard_data,
+    deposit_advance,
     receive_payment,
     transaction_item,
+    use_advance,
 )
 from ..utils import seller_to_dict
 
@@ -121,6 +126,74 @@ class CustomerTransactionsView(SellerAPIView):
         txs = LedgerTransaction.objects.filter(customer=customer)
         return Response(
             {'transactions': [transaction_item(tx) for tx in txs]}
+        )
+
+
+class CustomerAdvanceView(SellerAPIView):
+    def get(self, request, customer_id):
+        customer = get_object_or_404(
+            SellerCustomer, id=customer_id, seller=request.user
+        )
+        return Response({'advance': advance_summary(customer)})
+
+
+class AdvanceDepositView(SellerAPIView):
+    def post(self, request):
+        serializer = AdvanceDepositSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        customer = get_object_or_404(
+            SellerCustomer,
+            id=data['customer_id'],
+            seller=request.user,
+        )
+        tx = deposit_advance(
+            request.user,
+            customer,
+            data['amount'],
+            payment_method=data.get('payment_method', 'UPI'),
+            note=data.get('note', ''),
+        )
+        customer.refresh_from_db()
+        return Response(
+            {
+                'message': 'Advance deposited',
+                'advance': advance_summary(customer),
+                'transaction': transaction_item(tx),
+                'customer': customer_detail(customer),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AdvanceUseView(SellerAPIView):
+    def post(self, request):
+        serializer = AdvanceUseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        customer = get_object_or_404(
+            SellerCustomer,
+            id=data['customer_id'],
+            seller=request.user,
+        )
+        try:
+            tx = use_advance(
+                request.user,
+                customer,
+                data['amount'],
+                note=data.get('note', ''),
+            )
+        except ValueError as exc:
+            return Response({'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        customer.refresh_from_db()
+        return Response(
+            {
+                'message': 'Advance used',
+                'advance': advance_summary(customer),
+                'transaction': transaction_item(tx),
+                'customer': customer_detail(customer),
+            },
+            status=status.HTTP_201_CREATED,
         )
 
 

@@ -83,6 +83,8 @@ def ensure_customer_account(seller_customer, customer_user):
         account.seller = seller_customer.seller
         account.shop_name = seller_customer.seller.business_name
         account.outstanding_amount = seller_customer.outstanding_amount
+        account.advance_deposited = seller_customer.advance_deposited
+        account.advance_used = seller_customer.advance_used
         account.status = _map_status(seller_customer.status)
         account.has_balance = seller_customer.outstanding_amount > 0
         account.save()
@@ -96,6 +98,8 @@ def ensure_customer_account(seller_customer, customer_user):
         account.seller = seller_customer.seller
         account.seller_customer = seller_customer
         account.outstanding_amount = seller_customer.outstanding_amount
+        account.advance_deposited = seller_customer.advance_deposited
+        account.advance_used = seller_customer.advance_used
         account.save()
         return account
 
@@ -105,6 +109,8 @@ def ensure_customer_account(seller_customer, customer_user):
         seller=seller_customer.seller,
         seller_customer=seller_customer,
         outstanding_amount=seller_customer.outstanding_amount,
+        advance_deposited=seller_customer.advance_deposited,
+        advance_used=seller_customer.advance_used,
         status=_map_status(seller_customer.status),
         has_balance=seller_customer.outstanding_amount > 0,
     )

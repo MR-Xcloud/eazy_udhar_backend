@@ -1,5 +1,6 @@
 import random
 from datetime import timedelta
+from decimal import Decimal
 
 from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
@@ -141,6 +142,19 @@ class AddCreditSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     note = serializers.CharField(required=False, allow_blank=True, default='')
     send_sms = serializers.BooleanField(required=False, default=None, allow_null=True)
+
+
+class AdvanceDepositSerializer(serializers.Serializer):
+    customer_id = serializers.UUIDField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0.01'))
+    payment_method = serializers.CharField(default='UPI')
+    note = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class AdvanceUseSerializer(serializers.Serializer):
+    customer_id = serializers.UUIDField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0.01'))
+    note = serializers.CharField(required=False, allow_blank=True, default='')
 
 
 class RemindSerializer(serializers.Serializer):

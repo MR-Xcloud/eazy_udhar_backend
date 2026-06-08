@@ -33,9 +33,10 @@ def _format_amount(amount):
     return str(value)
 
 
-def _format_template_value(value):
+def _format_template_value(value, *, max_len=None):
     text = str(value or '').strip()
-    max_len = getattr(settings, 'NIMBUS_SMS_VAR_MAX_LENGTH', 30)
+    if max_len is None:
+        max_len = getattr(settings, 'NIMBUS_SMS_VAR_MAX_LENGTH', 30)
     if max_len > 0 and len(text) > max_len:
         return text[:max_len]
     return text
@@ -49,10 +50,19 @@ def _format_mobile_for_api(phone):
     return phone
 
 
-def _apply_template(template, values):
+def _apply_template(template, values, *, raw_var_indices=None):
+    """Replace {#var#} placeholders; raw_var_indices skips truncation (e.g. statement URL)."""
+    raw_var_indices = raw_var_indices or set()
     text = template
-    for value in values:
-        text = text.replace('{#var#}', _format_template_value(value), 1)
+    for index, value in enumerate(values):
+        if index in raw_var_indices:
+            replacement = _format_template_value(
+                value,
+                max_len=getattr(settings, 'NIMBUS_SMS_LINK_VAR_MAX_LENGTH', 0),
+            )
+        else:
+            replacement = _format_template_value(value)
+        text = text.replace('{#var#}', replacement, 1)
     return text
 
 
@@ -232,4 +242,71 @@ def send_payment_sms(*, seller, customer, amount, balance=None, payment_method='
         mobile=customer.phone,
         text=text,
         template_id=settings.NIMBUS_PAYMENT_TEMPLATE_ID,
+    )
+
+
+def _build_daily_credit_text(amount, shop_name, statement_url):
+    """Nightly digest — third {#var#} is the customer's day-statement link."""
+    return _apply_template(
+        settings.NIMBUS_CREDIT_SMS_TEXT,
+        [
+            _format_amount(amount),
+            shop_name,
+            statement_url,
+        ],
+        raw_var_indices={2},
+    )
+
+
+def _build_daily_payment_text(amount, shop_name, statement_url):
+    """Nightly digest — third {#var#} is the customer's day-statement link."""
+    return _apply_template(
+        settings.NIMBUS_PAYMENT_SMS_TEXT,
+        [
+            _format_amount(amount),
+            shop_name,
+            statement_url,
+        ],
+        raw_var_indices={2},
+    )
+
+
+def send_daily_digest_sms(*, seller, customer, digest):
+    """
+    One SMS per customer per night summarizing the day's credit/payment activity.
+    Uses CREDIT template if any credit today, else PAYMENT template.
+    """
+    from .daily_sms import statement_link
+
+    link = statement_link(digest.token)
+    shop_name = seller.business_name
+    has_credit = digest.credit_total > 0
+    has_payment = digest.payment_total > 0
+
+    if has_credit:
+        amount = digest.credit_total
+        text = _build_daily_credit_text(amount, shop_name, link)
+        template_id = settings.NIMBUS_CREDIT_TEMPLATE_ID
+        kind = 'CREDIT DIGEST'
+    elif has_payment:
+        amount = digest.payment_total
+        text = _build_daily_payment_text(amount, shop_name, link)
+        template_id = settings.NIMBUS_PAYMENT_TEMPLATE_ID
+        kind = 'PAYMENT DIGEST'
+    else:
+        return {
+            'sent': False,
+            'message_id': '',
+            'error': 'No credit or payment activity for digest',
+            'raw_response': '',
+        }
+
+    _sms_print(
+        f'{kind} SMS — customer={customer.name!r} phone={customer.phone!r} '
+        f'amount={amount} date={digest.activity_date} link={link!r}'
+    )
+    return send_push_sms(
+        mobile=customer.phone,
+        text=text,
+        template_id=template_id,
     )

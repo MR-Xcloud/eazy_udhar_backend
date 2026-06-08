@@ -17,11 +17,43 @@ def _time_label(dt):
     return dt.strftime('%d %b, %I:%M %p')
 
 
+def advance_summary(source):
+    """Build advance payload with all field name aliases the app accepts."""
+    deposited = source.advance_deposited
+    used = source.advance_used
+    remaining = source.advance_balance
+    summary = {
+        'total_deposited': float(deposited),
+        'total_used': float(used),
+        'remaining': float(remaining),
+        'advance_deposited': float(deposited),
+        'advance_used': float(used),
+        'advance_balance': float(remaining),
+        'deposited': float(deposited),
+        'used': float(used),
+        'balance_available': float(remaining),
+    }
+    return summary
+
+
+def _attach_advance_fields(data, customer):
+    summary = advance_summary(customer)
+    data['advance'] = summary
+    data.update(summary)
+    return data
+
+
+def sync_advance_to_account(customer, account):
+    account.advance_deposited = customer.advance_deposited
+    account.advance_used = customer.advance_used
+    account.save(update_fields=['advance_deposited', 'advance_used', 'updated_at'])
+
+
 def customer_list_item(c):
     latest_tx = c.transactions.first()
     last_at = latest_tx.created_at if latest_tx else c.updated_at
     outstanding = c.outstanding_amount
-    return {
+    data = {
       'id': str(c.id),
       'name': c.name,
       'phone': c.phone,
@@ -36,10 +68,11 @@ def customer_list_item(c):
       'overdue': c.is_overdue,
       'is_negative': outstanding < 0,
   }
+    return _attach_advance_fields(data, c)
 
 
 def customer_detail(c):
-    return {
+    data = {
         'id': str(c.id),
         'name': c.name,
         'phone': c.phone,
@@ -50,14 +83,21 @@ def customer_detail(c):
         'address': c.address,
         'status': c.status,
     }
+    return _attach_advance_fields(data, c)
 
 
 def transaction_item(tx):
-    is_positive = tx.transaction_type == LedgerTransaction.TYPE_CREDIT
+    type_meta = {
+        LedgerTransaction.TYPE_CREDIT: ('Credit Added', True),
+        LedgerTransaction.TYPE_PAYMENT: ('Payment Received', False),
+        LedgerTransaction.TYPE_ADVANCE_DEPOSIT: ('Advance Deposit', True),
+        LedgerTransaction.TYPE_ADVANCE_USE: ('Advance Purchase', False),
+    }
+    title, is_positive = type_meta.get(tx.transaction_type, ('Transaction', False))
     return {
         'id': str(tx.id),
         'type': tx.transaction_type,
-        'title': 'Credit Added' if is_positive else 'Payment Received',
+        'title': title,
         'subtitle': _time_label(tx.created_at),
         'note': tx.note,
         'amount': float(tx.amount),
@@ -153,7 +193,7 @@ def add_credit(seller, customer, amount, note='', send_sms=None):
     from customerapp.models import CustomerNotification
     from django.conf import settings
 
-    from .nimbus_sms import nimbus_sms_configured, send_credit_sms
+    from .daily_sms import queued_sms_result, record_daily_activity
 
     if send_sms is None:
         send_sms = settings.NIMBUS_SMS_ENABLED
@@ -184,28 +224,15 @@ def add_credit(seller, customer, amount, note='', send_sms=None):
         )
 
     sms_result = None
-    if send_sms and nimbus_sms_configured():
-        print('[EasyUdhar SMS] add_credit — attempting SMS...', flush=True)
-        sms_result = send_credit_sms(
-            seller=seller,
-            customer=customer,
-            amount=amount,
-            balance=customer.outstanding_amount,
-        )
+    if send_sms:
+        digest = record_daily_activity(customer, tx)
+        sms_result = queued_sms_result(digest)
         print(
-            f'[EasyUdhar SMS] add_credit — done sent={sms_result.get("sent")} '
-            f'error={sms_result.get("error")!r}',
+            f'[EasyUdhar SMS] add_credit — queued for nightly digest '
+            f'url={sms_result.get("statement_url")}',
             flush=True,
         )
-    elif send_sms and not nimbus_sms_configured():
-        print('[EasyUdhar SMS] add_credit — SMS disabled (Nimbus not configured)', flush=True)
-        sms_result = {
-            'sent': False,
-            'message_id': '',
-            'error': 'Nimbus SMS not configured (set NIMBUS_DLT_ENTITY_ID).',
-            'raw_response': '',
-        }
-    elif not send_sms:
+    else:
         print('[EasyUdhar SMS] add_credit — SMS skipped (send_sms=false)', flush=True)
 
     return tx, sms_result
@@ -220,7 +247,7 @@ def receive_payment(seller, customer, amount, payment_method='cash', note='', se
     from customerapp.models import CustomerNotification
     from django.conf import settings
 
-    from .nimbus_sms import nimbus_sms_configured, send_payment_sms
+    from .daily_sms import queued_sms_result, record_daily_activity
 
     if send_sms is None:
         send_sms = settings.NIMBUS_SMS_ENABLED
@@ -254,32 +281,95 @@ def receive_payment(seller, customer, amount, payment_method='cash', note='', se
         )
 
     sms_result = None
-    if send_sms and nimbus_sms_configured():
-        print('[EasyUdhar SMS] receive_payment — attempting SMS...', flush=True)
-        sms_result = send_payment_sms(
-            seller=seller,
-            customer=customer,
-            amount=pay,
-            balance=customer.outstanding_amount,
-            payment_method=payment_method,
-        )
+    if send_sms:
+        digest = record_daily_activity(customer, tx)
+        sms_result = queued_sms_result(digest)
         print(
-            f'[EasyUdhar SMS] receive_payment — done sent={sms_result.get("sent")} '
-            f'error={sms_result.get("error")!r}',
+            f'[EasyUdhar SMS] receive_payment — queued for nightly digest '
+            f'url={sms_result.get("statement_url")}',
             flush=True,
         )
-    elif send_sms and not nimbus_sms_configured():
-        print('[EasyUdhar SMS] receive_payment — SMS disabled (Nimbus not configured)', flush=True)
-        sms_result = {
-            'sent': False,
-            'message_id': '',
-            'error': 'Nimbus SMS not configured (set NIMBUS_DLT_ENTITY_ID).',
-            'raw_response': '',
-        }
-    elif not send_sms:
+    else:
         print('[EasyUdhar SMS] receive_payment — SMS skipped (send_sms=false)', flush=True)
 
     return tx, sms_result
+
+
+def deposit_advance(seller, customer, amount, payment_method='UPI', note=''):
+    from customerapp.messaging import (
+        ensure_customer_account,
+        link_seller_customer,
+        notify_customer_event,
+    )
+    from customerapp.models import CustomerNotification
+
+    deposit = Decimal(str(amount))
+    customer.advance_deposited += deposit
+    customer.save(update_fields=['advance_deposited', 'updated_at'])
+    tx = LedgerTransaction.objects.create(
+        seller=seller,
+        customer=customer,
+        transaction_type=LedgerTransaction.TYPE_ADVANCE_DEPOSIT,
+        amount=deposit,
+        note=note,
+        payment_method=payment_method,
+    )
+
+    customer_user = link_seller_customer(customer)
+    if customer_user:
+        account = ensure_customer_account(customer, customer_user)
+        sync_advance_to_account(customer, account)
+        notify_customer_event(
+            customer_user,
+            account,
+            notification_type=CustomerNotification.TYPE_ADVANCE,
+            title=f'Advance received at {seller.business_name}',
+            subtitle=note or f'Rs. {deposit} added to your advance balance',
+            reference_id=str(tx.id),
+        )
+
+    return tx
+
+
+def use_advance(seller, customer, amount, note=''):
+    from customerapp.messaging import (
+        ensure_customer_account,
+        link_seller_customer,
+        notify_customer_event,
+    )
+    from customerapp.models import CustomerNotification
+
+    use_amount = Decimal(str(amount))
+    remaining = customer.advance_balance
+    if use_amount > remaining:
+        raise ValueError(
+            f'Amount exceeds advance balance. Available: Rs. {remaining}, requested: Rs. {use_amount}.'
+        )
+
+    customer.advance_used += use_amount
+    customer.save(update_fields=['advance_used', 'updated_at'])
+    tx = LedgerTransaction.objects.create(
+        seller=seller,
+        customer=customer,
+        transaction_type=LedgerTransaction.TYPE_ADVANCE_USE,
+        amount=use_amount,
+        note=note,
+    )
+
+    customer_user = link_seller_customer(customer)
+    if customer_user:
+        account = ensure_customer_account(customer, customer_user)
+        sync_advance_to_account(customer, account)
+        notify_customer_event(
+            customer_user,
+            account,
+            notification_type=CustomerNotification.TYPE_ADVANCE,
+            title=f'Advance used at {seller.business_name}',
+            subtitle=note or f'Rs. {use_amount} deducted from your advance',
+            reference_id=str(tx.id),
+        )
+
+    return tx
 
 
 def reports_overview(seller):
