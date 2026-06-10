@@ -34,6 +34,7 @@ from ..serializers import (
     StatementLineSerializer,
 )
 from ..services import dashboard_summary, payment_summary, process_payment
+from ..sync_service import CustomerSyncError, parse_since, pull_customer_changes
 from sellerapp.services import advance_summary
 from ..utils import customer_to_dict
 
@@ -58,6 +59,15 @@ class CustomerAccountsView(APIView):
 
     def get(self, request):
         qs = CustomerAccount.objects.filter(user=request.user)
+        since = request.query_params.get('since')
+        if since:
+            try:
+                qs = qs.filter(updated_at__gte=parse_since(since))
+            except CustomerSyncError as exc:
+                return Response(
+                    {'message': exc.message, 'code': exc.code},
+                    status=exc.status_code,
+                )
         limit = request.query_params.get('limit')
         if limit:
             try:
@@ -66,6 +76,22 @@ class CustomerAccountsView(APIView):
                 pass
         serializer = CustomerAccountSerializer(qs, many=True)
         return Response({'accounts': serializer.data})
+
+
+class CustomerSyncChangesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sync_customer_from_seller_ledgers(request.user)
+        since = request.query_params.get('since', '')
+        try:
+            data = pull_customer_changes(request.user, since=since or None)
+        except CustomerSyncError as exc:
+            return Response(
+                {'message': exc.message, 'code': exc.code},
+                status=exc.status_code,
+            )
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class CustomerAccountAdvanceView(APIView):

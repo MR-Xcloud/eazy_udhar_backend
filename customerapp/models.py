@@ -12,6 +12,7 @@ class Customer(AbstractUser):
     phone = models.CharField(max_length=15)
     full_name = models.CharField(max_length=100, null=True, blank=True)
     email = models.EmailField(unique=True)
+    promo_code = models.CharField(max_length=50, blank=True, default='')
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default=ROLE_CUSTOMER)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -186,6 +187,7 @@ class CustomerNotification(models.Model):
     TYPE_MESSAGE = 'message'
     TYPE_CREDIT = 'credit'
     TYPE_ADVANCE = 'advance'
+    TYPE_OVERDUE = 'overdue'
     TYPE_CHOICES = [
         (TYPE_REMINDER, 'Reminder'),
         (TYPE_PAYMENT, 'Payment'),
@@ -193,6 +195,7 @@ class CustomerNotification(models.Model):
         (TYPE_MESSAGE, 'Message'),
         (TYPE_CREDIT, 'Credit'),
         (TYPE_ADVANCE, 'Advance'),
+        (TYPE_OVERDUE, 'Overdue'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -298,6 +301,7 @@ class CustomerSettings(models.Model):
     privacy_show_phone = models.BooleanField(default=False)
     privacy_show_email = models.BooleanField(default=False)
     keep_signed_in = models.BooleanField(default=True)
+    push_notifications_enabled = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -306,9 +310,11 @@ class CustomerSettings(models.Model):
 
 class OTPRecord(models.Model):
     PURPOSE_LOGIN = 'login'
+    PURPOSE_SELLER_LOGIN = 'seller_login'
     PURPOSE_RESET = 'reset_password'
     PURPOSE_CHOICES = [
         (PURPOSE_LOGIN, 'Login'),
+        (PURPOSE_SELLER_LOGIN, 'Seller login'),
         (PURPOSE_RESET, 'Reset password'),
     ]
 

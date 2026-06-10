@@ -14,7 +14,6 @@ from customerapp.messaging import (
 from ..device_tokens import register_seller_device_token, unregister_seller_device_token
 from ..models import (
     CallLog,
-    CustomerReminder,
     LedgerTransaction,
     SellerCustomer,
     SellerNotification,
@@ -38,17 +37,23 @@ from ..serializers import (
 )
 from ..services import (
     activity_item,
-    add_credit,
     advance_summary,
     customer_detail,
     customer_list_item,
     dashboard_data,
-    deposit_advance,
-    receive_payment,
     transaction_item,
-    use_advance,
 )
-from ..utils import seller_to_dict
+from ..sync_service import (
+    SyncError,
+    apply_advance_deposit_idempotent,
+    apply_advance_use_idempotent,
+    apply_credit_idempotent,
+    apply_payment_idempotent,
+    create_customer_idempotent,
+    parse_since,
+    write_result,
+)
+from ..utils import get_seller_customer, seller_to_dict
 
 
 class SellerAPIView(APIView):
@@ -71,35 +76,64 @@ class SellerCustomersView(SellerAPIView):
         qs = SellerCustomer.objects.filter(seller=request.user)
         status_filter = request.query_params.get('status')
         search = request.query_params.get('search')
+        since = request.query_params.get('since')
         if status_filter and status_filter != 'all':
             qs = qs.filter(status=status_filter)
         if search:
             qs = qs.filter(Q(name__icontains=search) | Q(phone__icontains=search))
+        if since:
+            try:
+                qs = qs.filter(updated_at__gte=parse_since(since))
+            except SyncError as exc:
+                return Response(
+                    {'message': exc.message, 'code': exc.code},
+                    status=exc.status_code,
+                )
         return Response({'customers': [customer_list_item(c) for c in qs]})
 
     def post(self, request):
+        if request.data.get('client_id'):
+            try:
+                customer, duplicate = create_customer_idempotent(
+                    request.user,
+                    client_id=request.data.get('client_id'),
+                    device_created_at=request.data.get('device_created_at'),
+                    name=request.data.get('name', ''),
+                    phone=request.data.get('phone', ''),
+                    email=request.data.get('email', ''),
+                    address=request.data.get('address', ''),
+                    city=request.data.get('city', ''),
+                    state=request.data.get('state', ''),
+                    country=request.data.get('country', 'India'),
+                )
+            except SyncError as exc:
+                return Response(
+                    {'message': exc.message, 'code': exc.code},
+                    status=exc.status_code,
+                )
+            return Response(
+                {'customer': customer_detail(customer), 'duplicate': duplicate},
+                status=status.HTTP_200_OK if duplicate else status.HTTP_201_CREATED,
+            )
+
         serializer = SellerCustomerCreateSerializer(
             data=request.data, context={'seller': request.user}
         )
         serializer.is_valid(raise_exception=True)
         customer = serializer.save()
         return Response(
-            {'customer': customer_detail(customer)},
+            {'customer': customer_detail(customer), 'duplicate': False},
             status=status.HTTP_201_CREATED,
         )
 
 
 class SellerCustomerDetailView(SellerAPIView):
     def get(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         return Response({'customer': customer_detail(customer)})
 
     def put(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         serializer = SellerCustomerUpdateSerializer(
             customer,
             data=request.data,
@@ -111,19 +145,24 @@ class SellerCustomerDetailView(SellerAPIView):
         return Response({'customer': customer_detail(customer)})
 
     def delete(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         customer.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CustomerTransactionsView(SellerAPIView):
     def get(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         txs = LedgerTransaction.objects.filter(customer=customer)
+        since = request.query_params.get('since')
+        if since:
+            try:
+                txs = txs.filter(updated_at__gte=parse_since(since))
+            except SyncError as exc:
+                return Response(
+                    {'message': exc.message, 'code': exc.code},
+                    status=exc.status_code,
+                )
         return Response(
             {'transactions': [transaction_item(tx) for tx in txs]}
         )
@@ -131,9 +170,7 @@ class CustomerTransactionsView(SellerAPIView):
 
 class CustomerAdvanceView(SellerAPIView):
     def get(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         return Response({'advance': advance_summary(customer)})
 
 
@@ -142,28 +179,27 @@ class AdvanceDepositView(SellerAPIView):
         serializer = AdvanceDepositSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        customer = get_object_or_404(
-            SellerCustomer,
-            id=data['customer_id'],
-            seller=request.user,
-        )
-        tx = deposit_advance(
-            request.user,
-            customer,
-            data['amount'],
-            payment_method=data.get('payment_method', 'UPI'),
-            note=data.get('note', ''),
-        )
+        customer = get_seller_customer(request.user, data['customer_id'])
+        try:
+            tx, duplicate = apply_advance_deposit_idempotent(
+                request.user,
+                customer,
+                data['amount'],
+                client_id=data.get('client_id'),
+                device_created_at=data.get('device_created_at'),
+                payment_method=data.get('payment_method', 'UPI'),
+                note=data.get('note', ''),
+            )
+        except SyncError as exc:
+            return Response(
+                {'message': exc.message, 'code': exc.code},
+                status=exc.status_code,
+            )
         customer.refresh_from_db()
-        return Response(
-            {
-                'message': 'Advance deposited',
-                'advance': advance_summary(customer),
-                'transaction': transaction_item(tx),
-                'customer': customer_detail(customer),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        payload = write_result(customer, tx, duplicate=duplicate)
+        payload['advance'] = advance_summary(customer)
+        payload['message'] = 'Advance deposited' if not duplicate else 'Advance deposit already recorded'
+        return Response(payload, status=status.HTTP_200_OK if duplicate else status.HTTP_201_CREATED)
 
 
 class AdvanceUseView(SellerAPIView):
@@ -171,37 +207,31 @@ class AdvanceUseView(SellerAPIView):
         serializer = AdvanceUseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        customer = get_object_or_404(
-            SellerCustomer,
-            id=data['customer_id'],
-            seller=request.user,
-        )
+        customer = get_seller_customer(request.user, data['customer_id'])
         try:
-            tx = use_advance(
+            tx, duplicate = apply_advance_use_idempotent(
                 request.user,
                 customer,
                 data['amount'],
+                client_id=data.get('client_id'),
+                device_created_at=data.get('device_created_at'),
                 note=data.get('note', ''),
             )
-        except ValueError as exc:
-            return Response({'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except SyncError as exc:
+            return Response(
+                {'message': exc.message, 'code': exc.code},
+                status=exc.status_code,
+            )
         customer.refresh_from_db()
-        return Response(
-            {
-                'message': 'Advance used',
-                'advance': advance_summary(customer),
-                'transaction': transaction_item(tx),
-                'customer': customer_detail(customer),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        payload = write_result(customer, tx, duplicate=duplicate)
+        payload['advance'] = advance_summary(customer)
+        payload['message'] = 'Advance used' if not duplicate else 'Advance use already recorded'
+        return Response(payload, status=status.HTTP_200_OK if duplicate else status.HTTP_201_CREATED)
 
 
 class CustomerNotesView(SellerAPIView):
     def get(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         messages = get_thread_messages(seller_customer=customer).filter(
             message__gt=''
         )
@@ -220,9 +250,7 @@ class CustomerNotesView(SellerAPIView):
         )
 
     def post(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         text = request.data.get('text') or request.data.get('note') or request.data.get('message', '')
         if not text.strip():
             return Response(
@@ -243,18 +271,14 @@ class CustomerNotesView(SellerAPIView):
 
 class CustomerMessagesView(SellerAPIView):
     def get(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         messages = get_thread_messages(seller_customer=customer)
         return Response(
             {'messages': [message_to_dict(m, request) for m in messages]}
         )
 
     def post(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         text = request.data.get('message') or request.data.get('text', '')
         if not text.strip():
             return Response(
@@ -275,9 +299,7 @@ class CustomerMessagesView(SellerAPIView):
 
 class CustomerFilesView(SellerAPIView):
     def get(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         messages = get_thread_messages(seller_customer=customer).exclude(attachment='')
         return Response(
             {
@@ -295,9 +317,7 @@ class CustomerFilesView(SellerAPIView):
         )
 
     def post(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         upload = request.FILES.get('file')
         if not upload:
             return Response(
@@ -330,28 +350,27 @@ class ReceivePaymentView(SellerAPIView):
         serializer = ReceivePaymentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        customer = get_object_or_404(
-            SellerCustomer,
-            id=data['customer_id'],
-            seller=request.user,
-        )
-        tx, sms_result = receive_payment(
-            request.user,
-            customer,
-            data['amount'],
-            payment_method=data.get('payment_method', 'UPI'),
-            note=data.get('note', ''),
-            send_sms=data.get('send_sms'),
-        )
-        return Response(
-            {
-                'message': 'Payment received',
-                'customer': customer_detail(customer),
-                'transaction': transaction_item(tx),
-                'sms': sms_result,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        customer = get_seller_customer(request.user, data['customer_id'])
+        try:
+            tx, duplicate, sms_result = apply_payment_idempotent(
+                request.user,
+                customer,
+                data['amount'],
+                client_id=data.get('client_id'),
+                device_created_at=data.get('device_created_at'),
+                payment_method=data.get('payment_method', 'UPI'),
+                note=data.get('note', ''),
+                send_sms=data.get('send_sms'),
+            )
+        except SyncError as exc:
+            return Response(
+                {'message': exc.message, 'code': exc.code},
+                status=exc.status_code,
+            )
+        customer.refresh_from_db()
+        payload = write_result(customer, tx, duplicate=duplicate, sms=sms_result)
+        payload['message'] = 'Payment received' if not duplicate else 'Payment already recorded'
+        return Response(payload, status=status.HTTP_200_OK if duplicate else status.HTTP_201_CREATED)
 
 
 class AddCreditView(SellerAPIView):
@@ -359,27 +378,26 @@ class AddCreditView(SellerAPIView):
         serializer = AddCreditSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        customer = get_object_or_404(
-            SellerCustomer,
-            id=data['customer_id'],
-            seller=request.user,
-        )
-        tx, sms_result = add_credit(
-            request.user,
-            customer,
-            data['amount'],
-            note=data.get('note', ''),
-            send_sms=data.get('send_sms'),
-        )
-        return Response(
-            {
-                'message': 'Credit added',
-                'customer': customer_detail(customer),
-                'transaction': transaction_item(tx),
-                'sms': sms_result,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        customer = get_seller_customer(request.user, data['customer_id'])
+        try:
+            tx, duplicate, sms_result = apply_credit_idempotent(
+                request.user,
+                customer,
+                data['amount'],
+                client_id=data.get('client_id'),
+                device_created_at=data.get('device_created_at'),
+                note=data.get('note', ''),
+                send_sms=data.get('send_sms'),
+            )
+        except SyncError as exc:
+            return Response(
+                {'message': exc.message, 'code': exc.code},
+                status=exc.status_code,
+            )
+        customer.refresh_from_db()
+        payload = write_result(customer, tx, duplicate=duplicate, sms=sms_result)
+        payload['message'] = 'Credit added' if not duplicate else 'Credit already recorded'
+        return Response(payload, status=status.HTTP_200_OK if duplicate else status.HTTP_201_CREATED)
 
 
 class UnifiedTransactionView(SellerAPIView):
@@ -397,42 +415,27 @@ class UnifiedTransactionView(SellerAPIView):
 
 class RemindCustomerView(SellerAPIView):
     def post(self, request, customer_id):
-        from customerapp.messaging import ensure_customer_account, link_seller_customer, notify_customer_event
-        from customerapp.models import CustomerNotification
+        from ..models import ReminderLog
+        from ..reminders import resolve_reminder_channels, send_customer_reminder
 
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         serializer = RemindSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        channels = serializer.validated_data['channels']
-        message = (
-            f'Reminder: {customer.name}, outstanding balance '
-            f'{customer.outstanding_amount}. Please pay at earliest.'
+        channels = resolve_reminder_channels(
+            request.user,
+            serializer.validated_data.get('channels'),
         )
-        reminder = CustomerReminder.objects.create(
-            customer=customer,
-            seller=request.user,
+        results = send_customer_reminder(
+            request.user,
+            customer,
             channels=channels,
-            message=message,
+            reminder_type=ReminderLog.TYPE_MANUAL,
         )
-
-        customer_user = link_seller_customer(customer)
-        if customer_user:
-            account = ensure_customer_account(customer, customer_user)
-            notify_customer_event(
-                customer_user,
-                account,
-                notification_type=CustomerNotification.TYPE_REMINDER,
-                title=f'Reminder from {request.user.business_name}',
-                subtitle=message,
-                reference_id=str(reminder.id),
-            )
-
+        any_sent = any(r.get('sent') for r in results.values())
         return Response(
             {
-                'message': 'Reminder sent',
-                'channels': channels,
+                'message': 'Reminder sent' if any_sent else 'Reminder queued with errors',
+                **results,
             },
             status=status.HTTP_200_OK,
         )
@@ -440,9 +443,7 @@ class RemindCustomerView(SellerAPIView):
 
 class CallLogView(SellerAPIView):
     def post(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         CallLog.objects.create(customer=customer, seller=request.user)
         return Response({'message': 'Call logged'}, status=status.HTTP_201_CREATED)
 

@@ -51,10 +51,11 @@ def sync_advance_to_account(customer, account):
 
 def customer_list_item(c):
     latest_tx = c.transactions.first()
-    last_at = latest_tx.created_at if latest_tx else c.updated_at
+    last_at = latest_tx.effective_at if latest_tx else c.updated_at
     outstanding = c.outstanding_amount
     data = {
       'id': str(c.id),
+      'client_id': str(c.client_id) if c.client_id else None,
       'name': c.name,
       'phone': c.phone,
       'initials': c.initials,
@@ -67,6 +68,8 @@ def customer_list_item(c):
       'status': c.status,
       'overdue': c.is_overdue,
       'is_negative': outstanding < 0,
+      'updated_at': c.updated_at.isoformat(),
+      'device_created_at': c.device_created_at.isoformat() if c.device_created_at else None,
   }
     return _attach_advance_fields(data, c)
 
@@ -74,6 +77,7 @@ def customer_list_item(c):
 def customer_detail(c):
     data = {
         'id': str(c.id),
+        'client_id': str(c.client_id) if c.client_id else None,
         'name': c.name,
         'phone': c.phone,
         'initials': c.initials,
@@ -82,6 +86,8 @@ def customer_detail(c):
         'email': c.email,
         'address': c.address,
         'status': c.status,
+        'updated_at': c.updated_at.isoformat(),
+        'device_created_at': c.device_created_at.isoformat() if c.device_created_at else None,
     }
     return _attach_advance_fields(data, c)
 
@@ -94,17 +100,23 @@ def transaction_item(tx):
         LedgerTransaction.TYPE_ADVANCE_USE: ('Advance Purchase', False),
     }
     title, is_positive = type_meta.get(tx.transaction_type, ('Transaction', False))
+    effective = tx.effective_at
     return {
         'id': str(tx.id),
+        'client_id': str(tx.client_id) if tx.client_id else None,
+        'customer_id': str(tx.customer_id),
         'type': tx.transaction_type,
         'title': title,
-        'subtitle': _time_label(tx.created_at),
+        'subtitle': _time_label(effective),
         'note': tx.note,
         'amount': float(tx.amount),
         'amount_display': format_inr_signed(tx.amount, positive=is_positive),
         'is_positive': is_positive,
         'payment_method': tx.payment_method or '',
         'created_at': tx.created_at.isoformat(),
+        'updated_at': tx.updated_at.isoformat(),
+        'device_created_at': tx.device_created_at.isoformat() if tx.device_created_at else None,
+        'effective_at': effective.isoformat(),
     }
 
 
@@ -119,12 +131,16 @@ def activity_item(c, tx=None):
         'initials': c.initials,
         'outstanding': float(outstanding),
         'outstanding_display': format_inr(outstanding),
-        'time': _time_label(tx.created_at) if tx else _time_label(c.updated_at),
+        'time': _time_label(tx.effective_at) if tx else _time_label(c.updated_at),
         'amount': format_inr(outstanding),
         'status': c.status,
         'overdue': c.is_overdue,
         'settled': settled,
     }
+
+
+def _transaction_effective_date(tx):
+    return (tx.device_created_at or tx.created_at).date()
 
 
 def dashboard_data(seller):
@@ -133,15 +149,14 @@ def dashboard_data(seller):
     total_receive = net
     total_pay = Decimal('0')
 
-    today = timezone.now().date()
-    today_collection = (
-        LedgerTransaction.objects.filter(
-            seller=seller,
-            transaction_type=LedgerTransaction.TYPE_PAYMENT,
-            created_at__date=today,
-        ).aggregate(t=Sum('amount'))['t']
-        or Decimal('0')
-    )
+    today = timezone.localdate()
+    today_collection = Decimal('0')
+    for tx in LedgerTransaction.objects.filter(
+        seller=seller,
+        transaction_type=LedgerTransaction.TYPE_PAYMENT,
+    ).only('amount', 'created_at', 'device_created_at'):
+        if _transaction_effective_date(tx) == today:
+            today_collection += tx.amount
 
     overdue_amount = customers.filter(status=SellerCustomer.STATUS_OVERDUE).aggregate(
         t=Sum('outstanding_amount')
@@ -184,7 +199,16 @@ def update_customer_status(customer):
     customer.save()
 
 
-def add_credit(seller, customer, amount, note='', send_sms=None):
+def add_credit(
+    seller,
+    customer,
+    amount,
+    note='',
+    send_sms=None,
+    *,
+    client_id=None,
+    device_created_at=None,
+):
     from customerapp.messaging import (
         ensure_customer_account,
         link_seller_customer,
@@ -206,6 +230,8 @@ def add_credit(seller, customer, amount, note='', send_sms=None):
         transaction_type=LedgerTransaction.TYPE_CREDIT,
         amount=amount,
         note=note,
+        client_id=client_id,
+        device_created_at=device_created_at,
     )
     update_customer_status(customer)
 
@@ -223,6 +249,10 @@ def add_credit(seller, customer, amount, note='', send_sms=None):
             reference_id=str(tx.id),
         )
 
+    from .notifications import notify_seller_credit
+
+    notify_seller_credit(seller, customer, amount, reference_id=str(tx.id))
+
     sms_result = None
     if send_sms:
         digest = record_daily_activity(customer, tx)
@@ -238,7 +268,17 @@ def add_credit(seller, customer, amount, note='', send_sms=None):
     return tx, sms_result
 
 
-def receive_payment(seller, customer, amount, payment_method='cash', note='', send_sms=None):
+def receive_payment(
+    seller,
+    customer,
+    amount,
+    payment_method='cash',
+    note='',
+    send_sms=None,
+    *,
+    client_id=None,
+    device_created_at=None,
+):
     from customerapp.messaging import (
         ensure_customer_account,
         link_seller_customer,
@@ -262,6 +302,8 @@ def receive_payment(seller, customer, amount, payment_method='cash', note='', se
         amount=pay,
         note=note,
         payment_method=payment_method,
+        client_id=client_id,
+        device_created_at=device_created_at,
     )
     update_customer_status(customer)
 
@@ -270,7 +312,7 @@ def receive_payment(seller, customer, amount, payment_method='cash', note='', se
         account = ensure_customer_account(customer, customer_user)
         account.outstanding_amount = customer.outstanding_amount
         account.has_balance = customer.outstanding_amount > 0
-        account.save(update_fields=['outstanding_amount', 'has_balance'])
+        account.save(update_fields=['outstanding_amount', 'has_balance', 'updated_at'])
         notify_customer_event(
             customer_user,
             account,
@@ -295,7 +337,16 @@ def receive_payment(seller, customer, amount, payment_method='cash', note='', se
     return tx, sms_result
 
 
-def deposit_advance(seller, customer, amount, payment_method='UPI', note=''):
+def deposit_advance(
+    seller,
+    customer,
+    amount,
+    payment_method='UPI',
+    note='',
+    *,
+    client_id=None,
+    device_created_at=None,
+):
     from customerapp.messaging import (
         ensure_customer_account,
         link_seller_customer,
@@ -313,6 +364,8 @@ def deposit_advance(seller, customer, amount, payment_method='UPI', note=''):
         amount=deposit,
         note=note,
         payment_method=payment_method,
+        client_id=client_id,
+        device_created_at=device_created_at,
     )
 
     customer_user = link_seller_customer(customer)
@@ -331,7 +384,15 @@ def deposit_advance(seller, customer, amount, payment_method='UPI', note=''):
     return tx
 
 
-def use_advance(seller, customer, amount, note=''):
+def use_advance(
+    seller,
+    customer,
+    amount,
+    note='',
+    *,
+    client_id=None,
+    device_created_at=None,
+):
     from customerapp.messaging import (
         ensure_customer_account,
         link_seller_customer,
@@ -354,6 +415,8 @@ def use_advance(seller, customer, amount, note=''):
         transaction_type=LedgerTransaction.TYPE_ADVANCE_USE,
         amount=use_amount,
         note=note,
+        client_id=client_id,
+        device_created_at=device_created_at,
     )
 
     customer_user = link_seller_customer(customer)

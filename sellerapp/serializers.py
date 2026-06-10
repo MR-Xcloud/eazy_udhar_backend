@@ -15,7 +15,26 @@ from .models import (
     SellerSettings,
     TeamMember,
 )
-from .utils import seller_customer_phone_exists, seller_to_dict
+from .utils import parse_client_uuid, seller_customer_phone_exists, seller_to_dict
+
+
+class ClientIdField(serializers.Field):
+    """Accept UUID or Flutter offline id: local:<uuid>."""
+
+    def to_internal_value(self, data):
+        if data is None or data == '':
+            return None
+        try:
+            return parse_client_uuid(data, required=True)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+    def to_representation(self, value):
+        return str(value) if value else None
+
+
+class CustomerRefField(ClientIdField):
+    """Server customer id or offline client_id (local:<uuid>)."""
 
 
 class SellerRegisterSerializer(serializers.ModelSerializer):
@@ -75,6 +94,59 @@ class ForgotPasswordSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
 
+class SellerOTPSendSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=False)
+    mobile = serializers.CharField(max_length=15, required=False)
+    phone = serializers.CharField(max_length=15, required=False)
+
+    def validate(self, attrs):
+        attrs['phone'] = attrs.get('mobile') or attrs.get('phone') or ''
+        if not attrs.get('email') and not attrs['phone']:
+            raise serializers.ValidationError('email or mobile is required.')
+        return attrs
+
+    def save(self):
+        from customerapp.models import OTPRecord
+        from customerapp.otp_service import resolve_seller_email, send_login_otp
+
+        try:
+            otp, delivery = send_login_otp(
+                email=self.validated_data.get('email'),
+                phone=self.validated_data.get('phone') or None,
+                purpose=OTPRecord.PURPOSE_SELLER_LOGIN,
+                resolver=resolve_seller_email,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        self.delivery_result = delivery
+        return otp
+
+
+class SellerOTPVerifySerializer(serializers.Serializer):
+    email = serializers.EmailField(required=False)
+    mobile = serializers.CharField(max_length=15, required=False)
+    phone = serializers.CharField(max_length=15, required=False)
+    otp = serializers.CharField(max_length=6)
+
+    def validate(self, attrs):
+        attrs['phone'] = attrs.get('mobile') or attrs.get('phone') or ''
+        if not attrs.get('email') and not attrs['phone']:
+            raise serializers.ValidationError('email or mobile is required.')
+        return attrs
+
+    def save(self):
+        from customerapp.otp_service import verify_seller_login_otp
+
+        try:
+            return verify_seller_login_otp(
+                email=self.validated_data.get('email'),
+                phone=self.validated_data.get('phone') or None,
+                otp_code=self.validated_data['otp'],
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+
 class SellerCustomerCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = SellerCustomer
@@ -129,37 +201,110 @@ class SellerCustomerUpdateSerializer(serializers.ModelSerializer):
         return phone
 
 
-class ReceivePaymentSerializer(serializers.Serializer):
-    customer_id = serializers.UUIDField()
+class ClientIdMixin(serializers.Serializer):
+    client_id = ClientIdField(required=False, allow_null=True)
+    device_created_at = serializers.DateTimeField(required=False, allow_null=True)
+
+
+class ReceivePaymentSerializer(ClientIdMixin):
+    customer_id = CustomerRefField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     payment_method = serializers.CharField(default='UPI')
     note = serializers.CharField(required=False, allow_blank=True, default='')
     send_sms = serializers.BooleanField(required=False, default=None, allow_null=True)
 
 
-class AddCreditSerializer(serializers.Serializer):
-    customer_id = serializers.UUIDField()
+class AddCreditSerializer(ClientIdMixin):
+    customer_id = CustomerRefField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     note = serializers.CharField(required=False, allow_blank=True, default='')
     send_sms = serializers.BooleanField(required=False, default=None, allow_null=True)
 
 
-class AdvanceDepositSerializer(serializers.Serializer):
-    customer_id = serializers.UUIDField()
+class AdvanceDepositSerializer(ClientIdMixin):
+    customer_id = CustomerRefField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0.01'))
     payment_method = serializers.CharField(default='UPI')
     note = serializers.CharField(required=False, allow_blank=True, default='')
 
 
-class AdvanceUseSerializer(serializers.Serializer):
-    customer_id = serializers.UUIDField()
+class AdvanceUseSerializer(ClientIdMixin):
+    customer_id = CustomerRefField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0.01'))
     note = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class SyncOperationSerializer(serializers.Serializer):
+    client_id = ClientIdField()
+    op = serializers.CharField(required=False, allow_blank=True)
+    payload = serializers.DictField(required=False, default=dict)
+
+    _PAYLOAD_KEYS = (
+        'name',
+        'phone',
+        'email',
+        'address',
+        'city',
+        'state',
+        'country',
+        'device_created_at',
+        'amount',
+        'note',
+        'payment_method',
+        'send_sms',
+        'customer_id',
+        'customer_client_id',
+    )
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict):
+            return super().to_internal_value(data)
+
+        item = dict(data)
+        aliases = (
+            ('clientId', 'client_id'),
+            ('type', 'op'),
+            ('operation', 'op'),
+            ('data', 'payload'),
+            ('body', 'payload'),
+        )
+        for src, dst in aliases:
+            if src in item and dst not in item:
+                item[dst] = item.pop(src)
+
+        payload = dict(item.get('payload') or {})
+        for key in self._PAYLOAD_KEYS:
+            if key in item and key not in payload:
+                payload[key] = item[key]
+
+        op = (item.get('op') or payload.pop('type', '') or payload.pop('operation', '') or '').strip()
+        if not op:
+            raise serializers.ValidationError({'op': 'This field is required.'})
+
+        item['op'] = op
+        item['payload'] = payload
+        return super().to_internal_value(item)
+
+
+class SyncPushSerializer(serializers.Serializer):
+    operations = SyncOperationSerializer(many=True, required=False, default=list)
+
+    def to_internal_value(self, data):
+        if isinstance(data, list):
+            data = {'operations': data}
+        elif isinstance(data, dict):
+            for key in ('operations', 'ops', 'changes', 'items', 'data', 'queue'):
+                if key in data and isinstance(data[key], list):
+                    data = {'operations': data[key]}
+                    break
+        return super().to_internal_value(data)
 
 
 class RemindSerializer(serializers.Serializer):
     channels = serializers.ListField(
-        child=serializers.CharField(), default=['whatsapp', 'sms']
+        child=serializers.CharField(),
+        required=False,
+        allow_empty=True,
     )
 
 
@@ -186,11 +331,34 @@ class SellerSettingsSerializer(serializers.ModelSerializer):
         fields = [
             'language',
             'reminder_channels',
+            'push_notifications_enabled',
+            'auto_remind_enabled',
+            'auto_remind_time',
+            'auto_remind_days_before',
+            'daily_summary_enabled',
+            'daily_summary_time',
+            'daily_summary_channels',
             'business_name',
             'team_count',
             'updated_at',
         ]
         read_only_fields = ['updated_at', 'business_name', 'team_count']
+
+    def validate_auto_remind_time(self, value):
+        return self._validate_hhmm(value)
+
+    def validate_daily_summary_time(self, value):
+        return self._validate_hhmm(value)
+
+    def _validate_hhmm(self, value):
+        text = str(value or '').strip()
+        parts = text.split(':')
+        if len(parts) != 2:
+            raise serializers.ValidationError('Time must be HH:mm (24-hour).')
+        hour, minute = int(parts[0]), int(parts[1])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise serializers.ValidationError('Invalid time.')
+        return f'{hour:02d}:{minute:02d}'
 
     def get_team_count(self, obj):
         return obj.seller.team_members.count()

@@ -17,6 +17,7 @@ from .views.customer_views import (
     CustomerAccountAdvanceView,
     CustomerAccountsView,
     CustomerDashboardView,
+    CustomerSyncChangesView,
     CustomerFcmTokenView,
     CustomerMeView,
     CustomerPaymentsView,
@@ -45,6 +46,7 @@ urlpatterns = [
     path('customer/me', CustomerMeView.as_view(), name='customer-me'),
     path('customer/dashboard', CustomerDashboardView.as_view(), name='customer-dashboard'),
     path('customer/accounts', CustomerAccountsView.as_view(), name='customer-accounts'),
+    path('customer/sync/changes', CustomerSyncChangesView.as_view(), name='customer-sync-changes'),
     path(
         'customer/accounts/<uuid:shop_id>/advance',
         CustomerAccountAdvanceView.as_view(),

@@ -93,9 +93,23 @@ class OTPSendView(APIView):
         serializer = OTPSendSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         otp = serializer.save()
-        payload = {'message': 'OTP sent successfully.'}
+        delivery = getattr(serializer, 'delivery_result', None) or {}
+        payload = {
+            'message': delivery.get('message') or (
+                'OTP sent to your email.' if delivery.get('sent') else 'OTP generated.'
+            ),
+            'email': delivery,
+        }
         if request.data.get('debug'):
             payload['otp'] = otp
+        if delivery and not delivery.get('sent'):
+            return Response(
+                {
+                    **payload,
+                    'message': delivery.get('error') or 'OTP could not be sent via email.',
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         return Response(payload, status=status.HTTP_200_OK)
 
 

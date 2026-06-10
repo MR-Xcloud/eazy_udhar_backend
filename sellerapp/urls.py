@@ -4,6 +4,8 @@ from .views.auth_views import (
     ForgotPasswordView,
     LogoutView,
     SellerLoginView,
+    SellerOTPSendView,
+    SellerOTPVerifyView,
     SellerRegisterView,
     SellerTokenRefreshView,
 )
@@ -15,6 +17,7 @@ from .views.report_views import (
     ReportsMonthlySummaryView,
     ReportsOverviewView,
 )
+from .views.sync_views import SellerSyncChangesView, SellerSyncPushView
 from .views.seller_views import (
     AddCreditView,
     AdvanceDepositView,
@@ -45,50 +48,54 @@ urlpatterns = [
     # P0 — Auth
     path('auth/seller/register', SellerRegisterView.as_view(), name='seller-register'),
     path('auth/seller/login', SellerLoginView.as_view(), name='seller-login'),
+    path('auth/otp/send', SellerOTPSendView.as_view(), name='seller-otp-send'),
+    path('auth/otp/verify', SellerOTPVerifyView.as_view(), name='seller-otp-verify'),
     path('auth/forgot-password', ForgotPasswordView.as_view(), name='seller-forgot-password'),
     path('auth/refresh', SellerTokenRefreshView.as_view(), name='seller-token-refresh'),
     path('auth/logout', LogoutView.as_view(), name='seller-logout'),
     # P0 — Home & customers
     path('seller/me', SellerMeView.as_view(), name='seller-me'),
     path('seller/dashboard', SellerDashboardView.as_view(), name='seller-dashboard'),
+    path('seller/sync/push', SellerSyncPushView.as_view(), name='seller-sync-push'),
+    path('seller/sync/changes', SellerSyncChangesView.as_view(), name='seller-sync-changes'),
     path('seller/customers', SellerCustomersView.as_view(), name='seller-customers'),
     path(
-        'seller/customers/<uuid:customer_id>',
+        'seller/customers/<str:customer_id>',
         SellerCustomerDetailView.as_view(),
         name='seller-customer-detail',
     ),
     path(
-        'seller/customers/<uuid:customer_id>/transactions',
+        'seller/customers/<str:customer_id>/transactions',
         CustomerTransactionsView.as_view(),
         name='seller-customer-transactions',
     ),
     path(
-        'seller/customers/<uuid:customer_id>/advance',
+        'seller/customers/<str:customer_id>/advance',
         CustomerAdvanceView.as_view(),
         name='seller-customer-advance',
     ),
     path(
-        'seller/customers/<uuid:customer_id>/notes',
+        'seller/customers/<str:customer_id>/notes',
         CustomerNotesView.as_view(),
         name='seller-customer-notes',
     ),
     path(
-        'seller/customers/<uuid:customer_id>/messages',
+        'seller/customers/<str:customer_id>/messages',
         CustomerMessagesView.as_view(),
         name='seller-customer-messages',
     ),
     path(
-        'seller/customers/<uuid:customer_id>/files',
+        'seller/customers/<str:customer_id>/files',
         CustomerFilesView.as_view(),
         name='seller-customer-files',
     ),
     path(
-        'seller/customers/<uuid:customer_id>/remind',
+        'seller/customers/<str:customer_id>/remind',
         RemindCustomerView.as_view(),
         name='seller-customer-remind',
     ),
     path(
-        'seller/customers/<uuid:customer_id>/call-log',
+        'seller/customers/<str:customer_id>/call-log',
         CallLogView.as_view(),
         name='seller-customer-call-log',
     ),
@@ -137,7 +144,7 @@ urlpatterns = [
         name='seller-reports-monthly',
     ),
     path(
-        'seller/reports/customer-statement/<uuid:customer_id>',
+        'seller/reports/customer-statement/<str:customer_id>',
         CustomerStatementReportView.as_view(),
         name='seller-reports-customer-statement',
     ),

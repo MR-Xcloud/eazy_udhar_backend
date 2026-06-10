@@ -219,6 +219,55 @@ def _response_indicates_success(body):
     return body.replace('-', '').replace('{', '').isdigit()
 
 
+def send_reminder_sms(*, seller, customer, message):
+    _sms_print(
+        f'REMINDER SMS — customer={customer.name!r} phone={customer.phone!r} '
+        f'shop={seller.business_name!r}'
+    )
+    template_id = getattr(settings, 'NIMBUS_REMINDER_TEMPLATE_ID', '').strip()
+    if not template_id:
+        return {
+            'sent': False,
+            'message_id': '',
+            'error': 'Reminder SMS template not configured (NIMBUS_REMINDER_TEMPLATE_ID).',
+            'raw_response': '',
+        }
+    text = _apply_template(
+        getattr(
+            settings,
+            'NIMBUS_REMINDER_SMS_TEXT',
+            'Reminder: Rs. {#var#} outstanding at {#var#}. Dear {#var#}, please pay. - EAZYUDHAR',
+        ),
+        [
+            _format_amount(customer.outstanding_amount),
+            seller.business_name,
+            customer.name,
+        ],
+    )
+    return send_push_sms(
+        mobile=customer.phone,
+        text=text,
+        template_id=template_id,
+    )
+
+
+def send_summary_sms(*, seller, text):
+    _sms_print(f'SUMMARY SMS — seller={seller.business_name!r}')
+    template_id = getattr(settings, 'NIMBUS_SUMMARY_TEMPLATE_ID', '').strip()
+    if not template_id:
+        return {
+            'sent': False,
+            'message_id': '',
+            'error': 'Summary SMS template not configured (NIMBUS_SUMMARY_TEMPLATE_ID).',
+            'raw_response': '',
+        }
+    return send_push_sms(
+        mobile=seller.phone,
+        text=text[:500],
+        template_id=template_id,
+    )
+
+
 def send_credit_sms(*, seller, customer, amount, balance=None):
     _sms_print(
         f'CREDIT SMS — customer={customer.name!r} phone={customer.phone!r} '
@@ -268,6 +317,23 @@ def _build_daily_payment_text(amount, shop_name, statement_url):
             statement_url,
         ],
         raw_var_indices={2},
+    )
+
+
+def _build_otp_text(otp):
+    return _apply_template(
+        settings.NIMBUS_OTP_SMS_TEXT,
+        [otp],
+    )
+
+
+def send_otp_sms(*, mobile, otp):
+    _sms_print(f'OTP SMS — mobile={mobile!r} otp={otp}')
+    text = _build_otp_text(otp)
+    return send_push_sms(
+        mobile=mobile,
+        text=text,
+        template_id=settings.NIMBUS_OTP_TEMPLATE_ID,
     )
 
 

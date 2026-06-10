@@ -10,6 +10,8 @@ from ..permissions import IsSeller
 from ..serializers import (
     ForgotPasswordSerializer,
     SellerLoginSerializer,
+    SellerOTPSendSerializer,
+    SellerOTPVerifySerializer,
     SellerRegisterSerializer,
 )
 from ..utils import seller_to_dict, tokens_for_seller
@@ -57,6 +59,50 @@ class ForgotPasswordView(APIView):
         serializer.is_valid(raise_exception=True)
         return Response(
             {'message': 'If the email exists, password reset instructions were sent.'},
+            status=status.HTTP_200_OK,
+        )
+
+
+class SellerOTPSendView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = SellerOTPSendSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        otp = serializer.save()
+        delivery = getattr(serializer, 'delivery_result', None) or {}
+        payload = {
+            'message': delivery.get('message') or (
+                'OTP sent to your email.' if delivery.get('sent') else 'OTP generated.'
+            ),
+            'email': delivery,
+        }
+        if request.data.get('debug'):
+            payload['otp'] = otp
+        if delivery and not delivery.get('sent'):
+            return Response(
+                {
+                    **payload,
+                    'message': delivery.get('error') or 'OTP could not be sent via email.',
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(payload, status=status.HTTP_200_OK)
+
+
+class SellerOTPVerifyView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = SellerOTPVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(
+            {
+                'message': 'OTP verified',
+                'user': seller_to_dict(user),
+                **tokens_for_seller(user),
+            },
             status=status.HTTP_200_OK,
         )
 

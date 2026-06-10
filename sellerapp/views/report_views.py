@@ -8,7 +8,7 @@ from ..authentication import SellerJWTAuthentication
 from ..models import LedgerTransaction, SellerCustomer
 from ..permissions import IsSeller
 from ..services import reports_overview, transaction_item
-from ..utils import format_inr
+from ..utils import format_inr, get_seller_customer
 
 
 class SellerReportView(APIView):
@@ -110,9 +110,7 @@ class ReportsMonthlySummaryView(SellerReportView):
 
 class CustomerStatementReportView(SellerReportView):
     def get(self, request, customer_id):
-        customer = get_object_or_404(
-            SellerCustomer, id=customer_id, seller=request.user
-        )
+        customer = get_seller_customer(request.user, customer_id)
         txs = LedgerTransaction.objects.filter(customer=customer)
         return Response(
             {

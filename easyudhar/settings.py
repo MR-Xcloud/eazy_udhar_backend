@@ -85,6 +85,24 @@ DATABASES = {
     }
 }
 
+# Local dev: run first (keep window open):
+#   ssh -L 3307:127.0.0.1:3306 root@server.inwizy.com
+# On VPS (app + DB same server): DB_HOST=127.0.0.1 DB_PORT=3306
+# Direct remote (if firewall allows 3306): DB_HOST=server.inwizy.com DB_PORT=3306
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.mysql',
+#         'NAME': os.environ.get('DB_NAME', 'eazyudhar'),
+#         'USER': os.environ.get('DB_USER', 'eazyudhar'),
+#         'PASSWORD': os.environ.get('DB_PASSWORD', 'Eazy@2026#'),
+#         'HOST': os.environ.get('DB_HOST', '193.180.212.163'),
+#         'PORT': os.environ.get('DB_PORT', '3306'),
+#         'OPTIONS': {
+#             'charset': 'utf8mb4',
+#             'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+#         },
+#     },
+# }
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -138,8 +156,12 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(
+        minutes=int(os.environ.get('JWT_ACCESS_TOKEN_MINUTES', '60'))
+    ),
+    'REFRESH_TOKEN_LIFETIME': timedelta(
+        days=int(os.environ.get('JWT_REFRESH_TOKEN_DAYS', '30'))
+    ),
     'ROTATE_REFRESH_TOKENS': True,
 }
 
@@ -191,6 +213,12 @@ NIMBUS_CREDIT_TEMPLATE_ID = os.environ.get(
 NIMBUS_PAYMENT_TEMPLATE_ID = os.environ.get(
     'NIMBUS_PAYMENT_TEMPLATE_ID',
     '1207178013900576203',
+).strip()
+# Login OTP — register template on Nimbus DLT portal, then set template id here.
+NIMBUS_OTP_TEMPLATE_ID = os.environ.get('NIMBUS_OTP_TEMPLATE_ID', '').strip()
+NIMBUS_OTP_SMS_TEXT = os.environ.get(
+    'NIMBUS_OTP_SMS_TEXT',
+    'Your OTP for login to EAZYUDHAR is {#var#}. Valid for 5 minutes. Do not share. - EAZYUDHAR by INWIZY',
 ).strip()
 # DLT-approved templates (CREDIT3 / PAYMENT3) — wording must not change.
 NIMBUS_CREDIT_SMS_TEXT = os.environ.get(
@@ -246,3 +274,44 @@ if os.environ.get('RENDER') or _render_hostname:
     SESSION_COOKIE_SECURE = True
     if _render_hostname and _render_hostname not in ALLOWED_HOSTS:
         ALLOWED_HOSTS = ['*', _render_hostname]
+
+# Postmark SMTP — login OTP (replaces Nimbus SMS OTP)
+POSTMARK_SERVER_TOKEN = os.environ.get(
+    'POSTMARK_SERVER_TOKEN',
+    '560b9e20-b49f-4a1c-9a46-45df5610caf1',
+).strip()
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.postmarkapp.com').strip()
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', POSTMARK_SERVER_TOKEN).strip()
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', POSTMARK_SERVER_TOKEN).strip()
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'true').strip().lower() in ('1', 'true', 'yes')
+EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'false').strip().lower() in ('1', 'true', 'yes')
+EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '30'))
+# Must be a verified sender signature in Postmark (inwizy.com domain)
+DEFAULT_FROM_EMAIL = os.environ.get('OTP_FROM_EMAIL', 'alerts@inwizy.com').strip()
+OTP_EMAIL_SUBJECT = os.environ.get('OTP_EMAIL_SUBJECT', 'Your EAZYUDHAR login code').strip()
+OTP_EXPIRY_MINUTES = int(os.environ.get('OTP_EXPIRY_MINUTES', '5'))
+OTP_RESEND_COOLDOWN_SECONDS = int(os.environ.get('OTP_RESEND_COOLDOWN_SECONDS', '60'))
+OTP_EMAIL_LOGO_URL = os.environ.get(
+    'OTP_EMAIL_LOGO_URL',
+    'https://res.cloudinary.com/dm2pfuzxn/image/upload/v1780986731/EazyUdhar_logo_jg0ybi.png',
+).strip()
+
+# Reminder / daily summary SMS (DLT templates on Nimbus)
+NIMBUS_REMINDER_TEMPLATE_ID = os.environ.get('NIMBUS_REMINDER_TEMPLATE_ID', '').strip()
+NIMBUS_REMINDER_SMS_TEXT = os.environ.get(
+    'NIMBUS_REMINDER_SMS_TEXT',
+    'Reminder: Rs. {#var#} outstanding at {#var#}. Dear {#var#}, please pay. - EAZYUDHAR',
+).strip()
+NIMBUS_SUMMARY_TEMPLATE_ID = os.environ.get('NIMBUS_SUMMARY_TEMPLATE_ID', '').strip()
+
+# WhatsApp Cloud API (optional — manual remind when configured)
+WHATSAPP_API_ENABLED = os.environ.get('WHATSAPP_API_ENABLED', 'false').strip().lower() in (
+    '1',
+    'true',
+    'yes',
+)
+WHATSAPP_ACCESS_TOKEN = os.environ.get('WHATSAPP_ACCESS_TOKEN', '').strip()
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get('WHATSAPP_PHONE_NUMBER_ID', '').strip()
+WHATSAPP_API_VERSION = os.environ.get('WHATSAPP_API_VERSION', 'v21.0').strip()

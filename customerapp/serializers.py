@@ -23,9 +23,13 @@ class RegisterSerializer(serializers.ModelSerializer):
     mobile = serializers.CharField(source='phone')
     role = serializers.CharField(required=False, default=Customer.ROLE_CUSTOMER)
 
+    promo_code = serializers.CharField(
+        max_length=50, required=False, allow_blank=True, default=''
+    )
+
     class Meta:
         model = Customer
-        fields = ['name', 'email', 'mobile', 'password', 'role']
+        fields = ['name', 'email', 'mobile', 'password', 'role', 'promo_code']
         extra_kwargs = {'password': {'write_only': True}}
 
     def validate_role(self, value):
@@ -47,6 +51,9 @@ class RegisterSerializer(serializers.ModelSerializer):
         if len(value) < 8:
             raise serializers.ValidationError('Password must be at least 8 characters.')
         return value
+
+    def validate_promo_code(self, value):
+        return (value or '').strip()
 
     def create(self, validated_data):
         password = validated_data.pop('password')
@@ -140,55 +147,55 @@ class GoogleSignInSerializer(serializers.Serializer):
 
 
 class OTPSendSerializer(serializers.Serializer):
-    mobile = serializers.CharField(max_length=15)
+    email = serializers.EmailField(required=False)
+    mobile = serializers.CharField(max_length=15, required=False)
+    phone = serializers.CharField(max_length=15, required=False)
+
+    def validate(self, attrs):
+        attrs['phone'] = attrs.get('mobile') or attrs.get('phone') or ''
+        if not attrs.get('email') and not attrs['phone']:
+            raise serializers.ValidationError('email or mobile is required.')
+        return attrs
 
     def save(self):
-        otp = f'{random.randint(100000, 999999)}'
-        OTPRecord.objects.create(
-            phone=self.validated_data['mobile'],
-            otp_code=otp,
-            purpose=OTPRecord.PURPOSE_LOGIN,
-            expires_at=timezone.now() + timedelta(minutes=5),
-        )
+        from .otp_service import resolve_customer_email, send_login_otp
+
+        try:
+            otp, delivery = send_login_otp(
+                email=self.validated_data.get('email'),
+                phone=self.validated_data.get('phone') or None,
+                purpose=OTPRecord.PURPOSE_LOGIN,
+                resolver=resolve_customer_email,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        self.delivery_result = delivery
         return otp
 
 
 class OTPVerifySerializer(serializers.Serializer):
-    mobile = serializers.CharField(max_length=15)
+    email = serializers.EmailField(required=False)
+    mobile = serializers.CharField(max_length=15, required=False)
+    phone = serializers.CharField(max_length=15, required=False)
     otp = serializers.CharField(max_length=6)
 
     def validate(self, attrs):
-        try:
-            record = OTPRecord.objects.filter(
-                phone=attrs['mobile'],
-                purpose=OTPRecord.PURPOSE_LOGIN,
-                is_verified=False,
-                expires_at__gte=timezone.now(),
-            ).latest('created_at')
-        except OTPRecord.DoesNotExist:
-            raise serializers.ValidationError('Invalid or expired OTP.')
-        if record.otp_code != attrs['otp']:
-            raise serializers.ValidationError('Invalid OTP.')
-        attrs['otp_record'] = record
+        attrs['phone'] = attrs.get('mobile') or attrs.get('phone') or ''
+        if not attrs.get('email') and not attrs['phone']:
+            raise serializers.ValidationError('email or mobile is required.')
         return attrs
 
     def save(self):
-        record = self.validated_data['otp_record']
-        record.is_verified = True
-        record.save(update_fields=['is_verified'])
-        user, _ = Customer.objects.get_or_create(
-            phone=self.validated_data['mobile'],
-            defaults={
-                'username': self.validated_data['mobile'],
-                'email': f"{self.validated_data['mobile']}@otp.local",
-                'full_name': 'Customer',
-            },
-        )
-        if not user.has_usable_password():
-            user.set_unusable_password()
-            user.save()
-        CustomerSettings.objects.get_or_create(user=user)
-        return user
+        from .otp_service import verify_customer_login_otp
+
+        try:
+            return verify_customer_login_otp(
+                email=self.validated_data.get('email'),
+                phone=self.validated_data.get('phone') or None,
+                otp_code=self.validated_data['otp'],
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class CustomerAccountSerializer(serializers.ModelSerializer):
@@ -349,8 +356,17 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Customer
-        fields = ['name', 'full_name', 'mobile', 'phone', 'email', 'avatar_initials', 'role']
-        read_only_fields = ['email', 'avatar_initials', 'role']
+        fields = [
+            'name',
+            'full_name',
+            'mobile',
+            'phone',
+            'email',
+            'promo_code',
+            'avatar_initials',
+            'role',
+        ]
+        read_only_fields = ['email', 'promo_code', 'avatar_initials', 'role']
 
 
 class SettingsSerializer(serializers.ModelSerializer):
@@ -361,6 +377,7 @@ class SettingsSerializer(serializers.ModelSerializer):
             'privacy_show_phone',
             'privacy_show_email',
             'keep_signed_in',
+            'push_notifications_enabled',
             'updated_at',
         ]
         read_only_fields = ['updated_at']

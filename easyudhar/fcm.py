@@ -160,8 +160,25 @@ def _send_to_tokens(token_model, owner_filter, *, title, body, data):
     return sent
 
 
+def _customer_push_enabled(user_id):
+    from customerapp.models import CustomerSettings
+
+    settings = CustomerSettings.objects.filter(user_id=user_id).first()
+    return settings is None or settings.push_notifications_enabled
+
+
+def _seller_push_enabled(seller_id):
+    from sellerapp.models import SellerSettings
+
+    settings = SellerSettings.objects.filter(seller_id=seller_id).first()
+    return settings is None or settings.push_notifications_enabled
+
+
 def push_customer_notification(notification):
     from customerapp.models import CustomerDeviceToken
+
+    if not _customer_push_enabled(notification.user_id):
+        return 0
 
     shop_id = ''
     if notification.shop_account_id:
@@ -183,6 +200,9 @@ def push_customer_notification(notification):
 
 def push_seller_notification(notification):
     from sellerapp.models import SellerDeviceToken
+
+    if not _seller_push_enabled(notification.seller_id):
+        return 0
 
     customer_id = ''
     if notification.seller_customer_id:

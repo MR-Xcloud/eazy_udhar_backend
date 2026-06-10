@@ -17,15 +17,15 @@ from .models import (
 
 @admin.register(Customer)
 class CustomerAdmin(UserAdmin):
-    list_display = ('email', 'full_name', 'phone', 'role', 'is_active', 'created_at')
+    list_display = ('email', 'full_name', 'phone', 'promo_code', 'role', 'is_active', 'created_at')
     list_filter = ('role', 'is_active', 'is_staff')
-    search_fields = ('email', 'full_name', 'phone', 'username')
+    search_fields = ('email', 'full_name', 'phone', 'promo_code', 'username')
     ordering = ('-created_at',)
     fieldsets = UserAdmin.fieldsets + (
-        ('EasyUdhar profile', {'fields': ('full_name', 'phone', 'role')}),
+        ('EasyUdhar profile', {'fields': ('full_name', 'phone', 'promo_code', 'role')}),
     )
     add_fieldsets = UserAdmin.add_fieldsets + (
-        ('EasyUdhar profile', {'fields': ('full_name', 'phone', 'role', 'email')}),
+        ('EasyUdhar profile', {'fields': ('full_name', 'phone', 'promo_code', 'role', 'email')}),
     )
 
 

@@ -1,6 +1,12 @@
 from rest_framework_simplejwt.tokens import RefreshToken
 
+import uuid
+
+from django.http import Http404
+
 from .models import Seller, SellerCustomer
+
+LOCAL_ID_PREFIX = 'local:'
 
 
 def tokens_for_seller(user):
@@ -53,3 +59,47 @@ def seller_customer_phone_exists(seller, phone, exclude_id=None):
         if normalize_phone(customer.phone) == norm:
             return True
     return False
+
+
+def normalize_client_id(value):
+    """Strip Flutter offline prefix: local:<uuid> -> <uuid>."""
+    if value is None:
+        return ''
+    text = str(value).strip()
+    if text.lower().startswith(LOCAL_ID_PREFIX):
+        text = text[len(LOCAL_ID_PREFIX):]
+    return text
+
+
+def parse_client_uuid(value, *, required=False):
+    text = normalize_client_id(value)
+    if not text:
+        if required:
+            raise ValueError('client_id must be a valid UUID.')
+        return None
+    try:
+        return uuid.UUID(text)
+    except (ValueError, TypeError) as exc:
+        raise ValueError('client_id must be a valid UUID.') from exc
+
+
+def get_seller_customer(seller, customer_ref):
+    """Resolve customer by server id or offline client_id (with optional local: prefix)."""
+    normalized = normalize_client_id(customer_ref)
+    if not normalized:
+        raise Http404('Customer not found')
+
+    try:
+        uid = uuid.UUID(normalized)
+    except (ValueError, TypeError) as exc:
+        raise Http404('Customer not found') from exc
+
+    customer = SellerCustomer.objects.filter(seller=seller, id=uid).first()
+    if customer:
+        return customer
+
+    customer = SellerCustomer.objects.filter(seller=seller, client_id=uid).first()
+    if customer:
+        return customer
+
+    raise Http404('Customer not found')

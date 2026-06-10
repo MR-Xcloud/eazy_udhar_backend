@@ -17,6 +17,7 @@ def customer_to_dict(user):
         'name': user.full_name,
         'email': user.email,
         'mobile': user.phone,
+        'promo_code': user.promo_code or '',
         'role': user.role,
         'avatar_initials': user.avatar_initials,
     }

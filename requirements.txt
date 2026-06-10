@@ -16,3 +16,6 @@ Pillow==12.2.0
 
 # Firebase Cloud Messaging (push notifications)
 firebase-admin==6.9.0
+
+# MariaDB / MySQL (production database)
+mysqlclient==2.2.8

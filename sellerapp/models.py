@@ -79,12 +79,21 @@ class SellerCustomer(models.Model):
         blank=True,
         related_name='seller_profiles',
     )
+    client_id = models.UUIDField(null=True, blank=True, db_index=True)
+    device_created_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         unique_together = [['seller', 'phone']]
         ordering = ['-updated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['seller', 'client_id'],
+                condition=models.Q(client_id__isnull=False),
+                name='unique_seller_customer_client_id',
+            ),
+        ]
 
     def __str__(self):
         return (
@@ -129,15 +138,32 @@ class LedgerTransaction(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     note = models.TextField(blank=True)
     payment_method = models.CharField(max_length=50, blank=True)
+    client_id = models.UUIDField(null=True, blank=True, db_index=True)
+    device_created_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['seller', 'updated_at'], name='ledger_seller_updated_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['seller', 'client_id'],
+                condition=models.Q(client_id__isnull=False),
+                name='unique_seller_ledger_client_id',
+            ),
+        ]
+
+    @property
+    def effective_at(self):
+        return self.device_created_at or self.created_at
 
     def __str__(self):
         return (
             f'{self.customer.name} — {self.get_transaction_type_display()} '
-            f'Rs.{self.amount} ({self.created_at:%Y-%m-%d %H:%M})'
+            f'Rs.{self.amount} ({self.effective_at:%Y-%m-%d %H:%M})'
         )
 
 
@@ -187,6 +213,42 @@ class CustomerReminder(models.Model):
         return f'Reminder — {self.customer.name} — [{channels}] {preview}'
 
 
+class ReminderLog(models.Model):
+    TYPE_MANUAL = 'manual'
+    TYPE_AUTO = 'auto'
+    TYPE_CHOICES = [(TYPE_MANUAL, 'Manual'), (TYPE_AUTO, 'Auto')]
+
+    CHANNEL_SMS = 'sms'
+    CHANNEL_WHATSAPP = 'whatsapp'
+    CHANNEL_PUSH = 'push'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    seller = models.ForeignKey(Seller, on_delete=models.CASCADE, related_name='reminder_logs')
+    customer = models.ForeignKey(
+        SellerCustomer, on_delete=models.CASCADE, related_name='reminder_logs'
+    )
+    channel = models.CharField(max_length=20)
+    reminder_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_MANUAL)
+    success = models.BooleanField(default=False)
+    error_message = models.CharField(max_length=500, blank=True)
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-sent_at']
+        indexes = [
+            models.Index(
+                fields=['seller', 'customer', 'channel', 'sent_at'],
+                name='reminder_log_dedupe_idx',
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f'ReminderLog — {self.customer.name} — {self.channel} '
+            f'[{self.reminder_type}] success={self.success}'
+        )
+
+
 class CallLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     customer = models.ForeignKey(SellerCustomer, on_delete=models.CASCADE, related_name='call_logs')
@@ -201,11 +263,20 @@ class SellerSettings(models.Model):
     seller = models.OneToOneField(Seller, on_delete=models.CASCADE, related_name='settings')
     language = models.CharField(max_length=10, default='en')
     reminder_channels = models.JSONField(default=list)
+    push_notifications_enabled = models.BooleanField(default=True)
+    auto_remind_enabled = models.BooleanField(default=True)
+    auto_remind_time = models.CharField(max_length=5, default='09:00')
+    auto_remind_days_before = models.PositiveSmallIntegerField(default=1)
+    daily_summary_enabled = models.BooleanField(default=True)
+    daily_summary_time = models.CharField(max_length=5, default='21:00')
+    daily_summary_channels = models.JSONField(default=list)
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
         if not self.reminder_channels:
             self.reminder_channels = ['whatsapp', 'sms']
+        if not self.daily_summary_channels:
+            self.daily_summary_channels = ['sms', 'push']
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -228,13 +299,19 @@ class TeamMember(models.Model):
 class SellerNotification(models.Model):
     TYPE_MESSAGE = 'message'
     TYPE_PAYMENT = 'payment'
+    TYPE_CREDIT = 'credit'
     TYPE_GENERAL = 'general'
     TYPE_REMINDER = 'reminder'
+    TYPE_OVERDUE = 'overdue'
+    TYPE_DAILY_SUMMARY = 'daily_summary'
     TYPE_CHOICES = [
         (TYPE_MESSAGE, 'Message'),
         (TYPE_PAYMENT, 'Payment'),
+        (TYPE_CREDIT, 'Credit'),
         (TYPE_GENERAL, 'General'),
         (TYPE_REMINDER, 'Reminder'),
+        (TYPE_OVERDUE, 'Overdue'),
+        (TYPE_DAILY_SUMMARY, 'Daily summary'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
