@@ -62,6 +62,15 @@ def use_application_default_credentials():
     return not resolve_firebase_credentials_path()
 
 
+def fcm_health_status():
+    """Return (ok, message) for admin integration health."""
+    if not fcm_enabled():
+        return False, 'Required credentials not configured.'
+    if _ensure_firebase_app() is None:
+        return False, 'Credentials found but Firebase Admin SDK failed to initialize.'
+    return True, ''
+
+
 def fcm_enabled():
     project_id = resolve_firebase_project_id()
     if not project_id:

@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
+import json
 import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -27,7 +28,7 @@ SECRET_KEY = 'django-insecure-n7oo(s5n6kh_w^7k9-^vda(yt^3=02w9dip0+u2)_9n)@yy*k@
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['*','192.168.0.147:8080','192.168.0.147:8099','192.168.0.147']
 
 
 # Application definition
@@ -39,14 +40,17 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'corsheaders',
     'rest_framework',
     'rest_framework_simplejwt',
     'customerapp',
     'sellerapp',
+    'adminapp',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -82,6 +86,9 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        'OPTIONS': {
+            'timeout': 30,
+        },
     }
 }
 
@@ -145,6 +152,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 AUTH_USER_MODEL = 'customerapp.Customer'
 
 AUTHENTICATION_BACKENDS = [
+    'adminapp.authentication.AdminBackend',
     'sellerapp.authentication.SellerBackend',
     'django.contrib.auth.backends.ModelBackend',
 ]
@@ -173,22 +181,32 @@ FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH', '').stri
 _default_firebase_creds = BASE_DIR / 'firebase' / 'service-account.json'
 if not FIREBASE_CREDENTIALS_PATH and _default_firebase_creds.exists():
     FIREBASE_CREDENTIALS_PATH = str(_default_firebase_creds)
+if not FIREBASE_CREDENTIALS_PATH:
+    _firebase_dir = BASE_DIR / 'firebase'
+    for _candidate in sorted(_firebase_dir.glob('*firebase-adminsdk*.json')):
+        FIREBASE_CREDENTIALS_PATH = str(_candidate)
+        break
 if not FIREBASE_PROJECT_ID:
     _google_services = BASE_DIR / 'firebase' / 'google-services.json'
     if _google_services.exists():
-        import json as _json
-
         try:
             with open(_google_services, encoding='utf-8') as _f:
-                FIREBASE_PROJECT_ID = _json.load(_f).get('project_id', '').strip()
-        except (OSError, _json.JSONDecodeError):
+                FIREBASE_PROJECT_ID = json.load(_f).get('project_id', '').strip()
+        except (OSError, json.JSONDecodeError):
             pass
+if not FIREBASE_PROJECT_ID and FIREBASE_CREDENTIALS_PATH:
+    try:
+        with open(FIREBASE_CREDENTIALS_PATH, encoding='utf-8') as _f:
+            FIREBASE_PROJECT_ID = json.load(_f).get('project_id', '').strip()
+    except (OSError, json.JSONDecodeError):
+        pass
 # When org policy blocks service-account key download, use:
 #   FIREBASE_USE_ADC=true  +  gcloud auth application-default login
 FIREBASE_USE_ADC = os.environ.get('FIREBASE_USE_ADC', '').strip()
 
-# Nimbus SMS — credit given & payment received (DLT: Service / Sub-category Implicit)
-# API: GET http://nimbusit.net/api/pushsms?user=&authkey=&sender=&mobile=&text=&entityid=&templateid=&rpt=1
+# Nimbus SMS — official HTTP API (Nimbus panel → API Keys → HTTP API)
+# GET http://nimbusit.net/api/pushsms?user=&authkey=&sender=&mobile=&text=&entityid=&templateid=&rpt=1
+# Only these params unless Nimbus support adds more. text must be URL-encoded.
 # Env vars override defaults below when set.
 NIMBUS_SMS_ENABLED = os.environ.get('NIMBUS_SMS_ENABLED', 'true').strip().lower() in (
     '1',
@@ -229,22 +247,24 @@ NIMBUS_PAYMENT_SMS_TEXT = os.environ.get(
     'NIMBUS_PAYMENT_SMS_TEXT',
     'Payment of Rs. {#var#} credited to your account by {#var#} Check Balance and Details on {#var#} - EAZYUDHAR by INWIZY',
 ).strip()
-# Third {#var#} in nightly digest SMS — customer's day-statement link (not truncated).
+# Third {#var#} in nightly digest SMS — statement link for API/in-app (not sent in SMS body).
 PUBLIC_STATEMENT_BASE_URL = os.environ.get(
     'PUBLIC_STATEMENT_BASE_URL',
     'https://eazy-udhar-backend.onrender.com',
 ).strip().rstrip('/')
-# Per-txn SMS replaced by nightly digest; third {#var#} is statement URL on credit/payment templates.
+# Per-txn SMS replaced by nightly digest; third {#var#} is platform name (DLT max ~30 chars per var).
+# Statement links are returned in API responses / in-app; not embedded in SMS text.
 NIMBUS_SMS_PLATFORM_NAME = os.environ.get('NIMBUS_SMS_PLATFORM_NAME', 'EAZYUDHAR').strip()
 # DLT: shop name / amount vars are often max 30 chars — we truncate in code if longer.
 NIMBUS_SMS_VAR_MAX_LENGTH = int(os.environ.get('NIMBUS_SMS_VAR_MAX_LENGTH', '30'))
-# Statement link in SMS: 0 = do not truncate (full URL in third {#var#}).
+# Reserved for future short-link support; URLs in {#var#} fail Jio DLT delivery if too long.
 NIMBUS_SMS_LINK_VAR_MAX_LENGTH = int(os.environ.get('NIMBUS_SMS_LINK_VAR_MAX_LENGTH', '0'))
 # Mobile: 10-digit local, or set prefix e.g. 91 -> sends 917579320174 (try if all msgs fail delivery).
 NIMBUS_MOBILE_PREFIX = os.environ.get('NIMBUS_MOBILE_PREFIX', '').strip()
-# DLT route — match Nimbus portal: Category = Service, Sub Category = Implicit
-NIMBUS_SMS_CATEGORY = os.environ.get('NIMBUS_SMS_CATEGORY', 'service').strip()
-NIMBUS_SMS_SUB_CATEGORY = os.environ.get('NIMBUS_SMS_SUB_CATEGORY', 'implicit').strip()
+# DLT route — leave blank to match Nimbus portal/API doc (entityid + templateid only).
+# Set only if Nimbus support specifies e.g. category=service&subcategory=implicit
+NIMBUS_SMS_CATEGORY = os.environ.get('NIMBUS_SMS_CATEGORY', '').strip()
+NIMBUS_SMS_SUB_CATEGORY = os.environ.get('NIMBUS_SMS_SUB_CATEGORY', '').strip()
 # Optional extra API keys if Nimbus support asks for different names (e.g. smstype=SI)
 NIMBUS_SMS_EXTRA_PARAMS = os.environ.get('NIMBUS_SMS_EXTRA_PARAMS', '').strip()
 NIMBUS_REQUEST_TIMEOUT = int(os.environ.get('NIMBUS_REQUEST_TIMEOUT', '30'))
@@ -257,6 +277,11 @@ csrf_trusted_origins = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
     'https://eazy-udhar-backend.onrender.com',
+    'http://192.168.0.146:8099',
+    'http://192.168.0.146:8022',
+    'http://192.168.0.145:8022',
+    'http://localhost:8022',
+    'http://127.0.0.1:8022',
 ]
 if _render_hostname:
     csrf_trusted_origins.append(f'https://{_render_hostname}')
@@ -267,6 +292,41 @@ if _csrf_origins_env:
         if origin.strip()
     )
 CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(csrf_trusted_origins))
+
+# CORS — admin panel + local dev frontends calling API on another port/host
+_cors_origins_env = os.environ.get('CORS_ALLOWED_ORIGINS', '').strip()
+cors_allowed_origins = [
+    'http://192.168.0.146:8022',
+    'http://192.168.0.145:8022',
+    'http://localhost:8022',
+    'http://127.0.0.1:8022',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:8080',
+    'http://127.0.0.1:8080',
+    'http://192.168.0.147:8099',
+    'http://192.168.0.147:8080',
+    'http://192.168.0.147'
+]
+if _cors_origins_env:
+    cors_allowed_origins.extend(
+        origin.strip()
+        for origin in _cors_origins_env.split(',')
+        if origin.strip()
+    )
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(cors_allowed_origins))
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
 
 if os.environ.get('RENDER') or _render_hostname:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
@@ -299,10 +359,13 @@ OTP_EMAIL_LOGO_URL = os.environ.get(
 ).strip()
 
 # Reminder / daily summary SMS (DLT templates on Nimbus)
-NIMBUS_REMINDER_TEMPLATE_ID = os.environ.get('NIMBUS_REMINDER_TEMPLATE_ID', '').strip()
+NIMBUS_REMINDER_TEMPLATE_ID = os.environ.get(
+    'NIMBUS_REMINDER_TEMPLATE_ID',
+    '1207178115256472122',
+).strip()
 NIMBUS_REMINDER_SMS_TEXT = os.environ.get(
     'NIMBUS_REMINDER_SMS_TEXT',
-    'Reminder: Rs. {#var#} outstanding at {#var#}. Dear {#var#}, please pay. - EAZYUDHAR',
+    'Payment Reminder: Balance of Rs. {#var#} is pending with {#var#} . View details on: {#var#} - EAZYUDHAR by INWIZY',
 ).strip()
 NIMBUS_SUMMARY_TEMPLATE_ID = os.environ.get('NIMBUS_SUMMARY_TEMPLATE_ID', '').strip()
 
@@ -315,3 +378,33 @@ WHATSAPP_API_ENABLED = os.environ.get('WHATSAPP_API_ENABLED', 'false').strip().l
 WHATSAPP_ACCESS_TOKEN = os.environ.get('WHATSAPP_ACCESS_TOKEN', '').strip()
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get('WHATSAPP_PHONE_NUMBER_ID', '').strip()
 WHATSAPP_API_VERSION = os.environ.get('WHATSAPP_API_VERSION', 'v21.0').strip()
+
+# Razorpay — customer shop payments (override via env in production)
+RAZORPAY_MODE = os.environ.get('RAZORPAY_MODE', 'test').strip().lower()
+RAZORPAY_TEST_KEY_ID = os.environ.get(
+    'RAZORPAY_TEST_KEY_ID',
+    'rzp_test_S7q8XaKD4I2vXY',
+).strip()
+RAZORPAY_TEST_KEY_SECRET = os.environ.get(
+    'RAZORPAY_TEST_KEY_SECRET',
+    'zKs6HX73ppAWspVbhp62K5av',
+).strip()
+RAZORPAY_TEST_WEBHOOK_SECRET = os.environ.get(
+    'RAZORPAY_TEST_WEBHOOK_SECRET',
+    'Qwerty@12345',
+).strip()
+RAZORPAY_LIVE_KEY_ID = os.environ.get('RAZORPAY_LIVE_KEY_ID', '').strip()
+RAZORPAY_LIVE_KEY_SECRET = os.environ.get('RAZORPAY_LIVE_KEY_SECRET', '').strip()
+RAZORPAY_LIVE_WEBHOOK_SECRET = os.environ.get('RAZORPAY_LIVE_WEBHOOK_SECRET', '').strip()
+
+
+def _configure_sqlite_connection(sender, connection, **kwargs):
+    if connection.vendor == 'sqlite':
+        with connection.cursor() as cursor:
+            cursor.execute('PRAGMA journal_mode=WAL;')
+            cursor.execute('PRAGMA busy_timeout=30000;')
+
+
+from django.db.backends.signals import connection_created
+
+connection_created.connect(_configure_sqlite_connection)

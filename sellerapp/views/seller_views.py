@@ -1,5 +1,6 @@
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -41,6 +42,7 @@ from ..services import (
     customer_detail,
     customer_list_item,
     dashboard_data,
+    refresh_overdue_for_seller,
     transaction_item,
 )
 from ..sync_service import (
@@ -68,17 +70,32 @@ class SellerMeView(SellerAPIView):
 
 class SellerDashboardView(SellerAPIView):
     def get(self, request):
+        try:
+            from ..seller_razorpay_service import sync_seller_payment_links
+
+            sync_seller_payment_links(request.user)
+        except Exception:
+            pass
         return Response(dashboard_data(request.user))
 
 
 class SellerCustomersView(SellerAPIView):
     def get(self, request):
+        refresh_overdue_for_seller(request.user)
         qs = SellerCustomer.objects.filter(seller=request.user)
         status_filter = request.query_params.get('status')
         search = request.query_params.get('search')
         since = request.query_params.get('since')
         if status_filter and status_filter != 'all':
-            qs = qs.filter(status=status_filter)
+            if status_filter == 'overdue':
+                today = timezone.localdate()
+                qs = qs.filter(
+                    outstanding_amount__gt=0,
+                    next_due_date__lt=today,
+                    next_due_date__isnull=False,
+                )
+            else:
+                qs = qs.filter(status=status_filter)
         if search:
             qs = qs.filter(Q(name__icontains=search) | Q(phone__icontains=search))
         if since:
@@ -388,6 +405,7 @@ class AddCreditView(SellerAPIView):
                 device_created_at=data.get('device_created_at'),
                 note=data.get('note', ''),
                 send_sms=data.get('send_sms'),
+                due_date=data.get('due_date'),
             )
         except SyncError as exc:
             return Response(
@@ -419,6 +437,14 @@ class RemindCustomerView(SellerAPIView):
         from ..reminders import resolve_reminder_channels, send_customer_reminder
 
         customer = get_seller_customer(request.user, customer_id)
+        if customer.outstanding_amount <= 0:
+            return Response(
+                {
+                    'message': 'Customer has no outstanding balance to remind.',
+                    'code': 'no_outstanding',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer = RemindSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         channels = resolve_reminder_channels(
@@ -517,6 +543,15 @@ class SellerNotificationReadView(SellerAPIView):
         return Response(SellerNotificationSerializer(notification).data)
 
 
+class SellerNotificationsReadAllView(SellerAPIView):
+    def patch(self, request):
+        updated = SellerNotification.objects.filter(
+            seller=request.user,
+            is_read=False,
+        ).update(is_read=True)
+        return Response({'message': 'All notifications marked read', 'updated': updated})
+
+
 class SellerFcmTokenView(SellerAPIView):
     def post(self, request):
         serializer = FcmTokenSerializer(data=request.data)
@@ -528,4 +563,178 @@ class SellerFcmTokenView(SellerAPIView):
         token = request.data.get('token', '')
         unregister_seller_device_token(request.user, token=token)
         return Response({'message': 'FCM token unregistered'})
+
+
+class SellerPaymentMethodsView(SellerAPIView):
+    def get(self, request):
+        return Response(
+            {
+                'methods': [
+                    {
+                        'id': 'cash',
+                        'label': 'Cash',
+                        'seller_manual': True,
+                        'online': False,
+                    },
+                    {
+                        'id': 'online',
+                        'label': 'UPI / Card / Wallet / Net Banking',
+                        'online': True,
+                        'seller_manual': False,
+                    },
+                    {
+                        'id': 'payment_link',
+                        'label': 'Payment link',
+                        'online': True,
+                        'seller_manual': False,
+                    },
+                ],
+                'partial_payment_allowed': True,
+                'online_gateway': 'razorpay',
+            }
+        )
+
+
+class SellerRazorpayConfigView(SellerAPIView):
+    def get(self, request):
+        from django.conf import settings
+
+        from customerapp.razorpay_service import razorpay_configured
+        from easyudhar.payment_utils import payment_methods_catalog
+        from easyudhar.razorpay_config import get_razorpay_credentials
+
+        key_id, _, _ = get_razorpay_credentials()
+        return Response(
+            {
+                'configured': razorpay_configured(),
+                'key_id': key_id or None,
+                'mode': settings.RAZORPAY_MODE,
+                'methods': payment_methods_catalog(online=True),
+                'partial_payment_allowed': True,
+            }
+        )
+
+
+class SellerCustomerRazorpayCreateOrderView(SellerAPIView):
+    def post(self, request, customer_id):
+        from customerapp.razorpay_service import RazorpayError
+
+        from ..seller_razorpay_service import create_seller_razorpay_order
+
+        customer = get_seller_customer(request.user, customer_id)
+        amount = request.data.get('amount') or request.data.get('total')
+        note = request.data.get('note', '')
+        if not amount:
+            return Response(
+                {'message': 'amount is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            payload = create_seller_razorpay_order(
+                seller=request.user,
+                customer=customer,
+                amount=amount,
+                note=note,
+            )
+        except RazorpayError as exc:
+            return Response(
+                {'message': exc.message, 'code': exc.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class SellerCustomerRazorpayVerifyView(SellerAPIView):
+    def post(self, request, customer_id):
+        from customerapp.razorpay_service import RazorpayError
+
+        from ..seller_razorpay_service import verify_and_settle_seller_payment
+
+        customer = get_seller_customer(request.user, customer_id)
+        order_id = (
+            request.data.get('razorpay_order_id')
+            or request.data.get('order_id')
+            or request.data.get('razorpayOrderId')
+        )
+        payment_id = (
+            request.data.get('razorpay_payment_id')
+            or request.data.get('payment_id')
+            or request.data.get('razorpayPaymentId')
+        )
+        signature = (
+            request.data.get('razorpay_signature')
+            or request.data.get('signature')
+            or request.data.get('razorpaySignature')
+        )
+        if not order_id or not payment_id or not signature:
+            return Response(
+                {
+                    'message': 'razorpay_order_id, razorpay_payment_id, and razorpay_signature are required.',
+                    'code': 'missing_fields',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            payload = verify_and_settle_seller_payment(
+                seller=request.user,
+                customer=customer,
+                razorpay_order_id=order_id,
+                razorpay_payment_id=payment_id,
+                razorpay_signature=signature,
+            )
+        except RazorpayError as exc:
+            return Response(
+                {'message': exc.message, 'code': exc.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(payload, status=status.HTTP_200_OK)
+
+
+class SellerCustomerPaymentLinkCreateView(SellerAPIView):
+    def post(self, request, customer_id):
+        from customerapp.razorpay_service import RazorpayError
+
+        from ..seller_razorpay_service import create_seller_payment_link
+
+        customer = get_seller_customer(request.user, customer_id)
+        amount = request.data.get('amount') or request.data.get('max_amount')
+        note = request.data.get('note', '')
+        if not amount:
+            return Response(
+                {'message': 'amount is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            payload = create_seller_payment_link(
+                seller=request.user,
+                customer=customer,
+                max_amount=amount,
+                note=note,
+            )
+        except RazorpayError as exc:
+            return Response(
+                {'message': exc.message, 'code': exc.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class SellerCustomerPaymentLinksSyncView(SellerAPIView):
+    def post(self, request, customer_id):
+        from customerapp.razorpay_service import RazorpayError
+
+        from ..seller_razorpay_service import sync_customer_payment_links
+
+        customer = get_seller_customer(request.user, customer_id)
+        try:
+            payload = sync_customer_payment_links(
+                seller=request.user,
+                customer=customer,
+            )
+        except RazorpayError as exc:
+            return Response(
+                {'message': exc.message, 'code': exc.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(payload, status=status.HTTP_200_OK)
 

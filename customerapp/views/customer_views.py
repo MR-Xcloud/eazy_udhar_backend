@@ -1,4 +1,4 @@
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -10,7 +10,6 @@ from ..device_tokens import register_customer_device_token, unregister_customer_
 from ..models import (
     CustomerAccount,
     CustomerNotification,
-    CustomerPayment,
     CustomerSettings,
     PaymentMethod,
     ShopMessage,
@@ -33,7 +32,7 @@ from ..serializers import (
     SettingsSerializer,
     StatementLineSerializer,
 )
-from ..services import dashboard_summary, payment_summary, process_payment
+from ..services import dashboard_summary, payment_history, payment_summary
 from ..sync_service import CustomerSyncError, parse_since, pull_customer_changes
 from sellerapp.services import advance_summary
 from ..utils import customer_to_dict
@@ -112,6 +111,7 @@ class AccountStatementView(APIView):
             {
                 'shop_id': str(account.id),
                 'shop_name': account.shop_name,
+                'customer_name': request.user.full_name or request.user.email,
                 'outstanding_amount': str(account.outstanding_amount),
                 'statement': StatementLineSerializer(lines, many=True).data,
             }
@@ -138,11 +138,20 @@ class ChatView(APIView):
             return Response({'message': 'Shop not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         if not account.seller_customer:
-            return Response({'messages': []})
+            return Response({'messages': [], 'transactions': []})
 
         messages = get_thread_messages(seller_customer=account.seller_customer)
+        from sellerapp.models import LedgerTransaction
+        from sellerapp.services import transaction_item
+
+        txs = LedgerTransaction.objects.filter(
+            customer=account.seller_customer
+        ).order_by('created_at')
         return Response(
-            {'messages': [message_to_dict(m, request) for m in messages]}
+            {
+                'messages': [message_to_dict(m, request) for m in messages],
+                'transactions': [transaction_item(tx) for tx in txs],
+            }
         )
 
     def post(self, request, shop_id):
@@ -150,6 +159,25 @@ class ChatView(APIView):
             account = resolve_account_for_shop(request.user, shop_id)
         except CustomerAccount.DoesNotExist:
             return Response({'message': 'Shop not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        upload = request.FILES.get('file')
+        text = (request.data.get('message') or '').strip()
+
+        if upload:
+            try:
+                msg = send_customer_message(
+                    request.user,
+                    account,
+                    text=text,
+                    attachment=upload,
+                    request=request,
+                )
+            except ValueError as exc:
+                return Response({'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                message_to_dict(msg, request),
+                status=status.HTTP_201_CREATED,
+            )
 
         serializer = ChatMessageSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -178,49 +206,32 @@ class ChatView(APIView):
 class CustomerPaymentsView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
-        shop_id = request.data.get('shopId') or request.data.get('shop_id')
-        shop_ids = request.data.get('shopIds') or request.data.get('shop_ids') or []
-        amount = request.data.get('amount') or request.data.get('total')
-        method = request.data.get('method', 'upi')
-
-        if not amount:
-            return Response(
-                {'message': 'amount is required'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            amount = Decimal(str(amount))
-        except (InvalidOperation, TypeError):
-            return Response(
-                {'message': 'Invalid amount'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        account = None
-        if shop_id and not shop_ids:
-            account = get_object_or_404(CustomerAccount, id=shop_id, user=request.user)
-            shop_ids = [shop_id]
-
-        try:
-            payments, reference_id = process_payment(
+    def get(self, request):
+        shop_id = request.query_params.get('shop_id') or request.query_params.get('shopId')
+        method = request.query_params.get('method')
+        page = request.query_params.get('page', 1)
+        page_size = request.query_params.get('page_size', 25)
+        return Response(
+            payment_history(
                 request.user,
-                shop_ids=shop_ids,
-                amount=amount,
+                page=page,
+                page_size=page_size,
+                shop_id=shop_id,
                 method=method,
-                account=account,
             )
-        except ValueError as exc:
-            return Response({'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        )
 
+    def post(self, request):
         return Response(
             {
-                'message': 'Payment successful',
-                'reference_id': reference_id,
-                'payments': PaymentSerializer(payments, many=True).data,
+                'message': (
+                    'Direct payments are disabled. Use Razorpay checkout: '
+                    'POST /sapp/customer/payments/create-order, then '
+                    'POST /sapp/customer/payments/verify after payment.'
+                ),
+                'code': 'razorpay_required',
             },
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -274,6 +285,17 @@ class NotificationReadView(APIView):
         notification.is_read = True
         notification.save(update_fields=['is_read'])
         return Response(NotificationSerializer(notification).data)
+
+
+class NotificationsReadAllView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        updated = CustomerNotification.objects.filter(
+            user=request.user,
+            is_read=False,
+        ).update(is_read=True)
+        return Response({'message': 'All notifications marked read', 'updated': updated})
 
 
 class ProfileView(APIView):

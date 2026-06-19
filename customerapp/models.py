@@ -148,6 +148,9 @@ class CustomerPayment(models.Model):
     method = models.CharField(max_length=50)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_SUCCESS)
     reference_id = models.CharField(max_length=100, blank=True)
+    razorpay_order_id = models.CharField(max_length=100, blank=True, db_index=True)
+    razorpay_payment_id = models.CharField(max_length=100, blank=True, db_index=True)
+    is_partial = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -158,16 +161,62 @@ class CustomerPayment(models.Model):
         return f'{self.user.email} — {shop} — Rs.{self.amount} ({self.status})'
 
 
+class RazorpayPaymentOrder(models.Model):
+    """Pending Razorpay checkout — ledger updated only after verify/webhook."""
+
+    STATUS_PENDING = 'pending'
+    STATUS_PAID = 'paid'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='razorpay_orders')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default='INR')
+    shop_ids = models.JSONField(default=list)
+    account_id = models.UUIDField(null=True, blank=True)
+    reference_id = models.CharField(max_length=100, unique=True)
+    razorpay_order_id = models.CharField(max_length=100, unique=True, db_index=True)
+    razorpay_payment_id = models.CharField(max_length=100, blank=True)
+    payment_method = models.CharField(max_length=20, blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.reference_id} — {self.razorpay_order_id} ({self.status})'
+
+
 class PaymentMethod(models.Model):
+    TYPE_CASH = 'cash'
     TYPE_UPI = 'upi'
+    TYPE_BANK = 'bank'
+    TYPE_CARD = 'card'
+    TYPE_CHEQUE = 'cheque'
     TYPE_WALLET = 'wallet'
-    TYPE_CHOICES = [(TYPE_UPI, 'UPI'), (TYPE_WALLET, 'Wallet')]
+    TYPE_CHOICES = [
+        (TYPE_CASH, 'Cash'),
+        (TYPE_UPI, 'UPI'),
+        (TYPE_BANK, 'Bank Transfer'),
+        (TYPE_CARD, 'Card'),
+        (TYPE_CHEQUE, 'Cheque'),
+        (TYPE_WALLET, 'Wallet'),
+    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='payment_methods')
     method_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_UPI)
     label = models.CharField(max_length=100, blank=True)
     upi_id = models.CharField(max_length=100, blank=True)
+    account_ref = models.CharField(max_length=100, blank=True, help_text='Bank A/C, card last4, cheque no.')
     is_default = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -279,6 +328,7 @@ class ShopMessage(models.Model):
     sender = models.CharField(max_length=20, choices=SENDER_CHOICES)
     message = models.TextField(blank=True)
     attachment = models.FileField(upload_to='chat/', blank=True)
+    flagged = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -38,6 +38,13 @@ from .views.seller_views import (
     SellerMeView,
     SellerNotificationReadView,
     SellerNotificationsListView,
+    SellerNotificationsReadAllView,
+    SellerPaymentMethodsView,
+    SellerRazorpayConfigView,
+    SellerCustomerRazorpayCreateOrderView,
+    SellerCustomerRazorpayVerifyView,
+    SellerCustomerPaymentLinkCreateView,
+    SellerCustomerPaymentLinksSyncView,
     SellerUnreadNotificationCountView,
     SettingsView,
     TeamView,
@@ -125,6 +132,11 @@ urlpatterns = [
         UnifiedTransactionView.as_view(),
         name='seller-transaction-unified',
     ),
+    path(
+        'seller/payments/methods',
+        SellerPaymentMethodsView.as_view(),
+        name='seller-payment-methods',
+    ),
     # P1 — Reports
     path('seller/reports/overview', ReportsOverviewView.as_view(), name='seller-reports-overview'),
     path(
@@ -159,6 +171,11 @@ urlpatterns = [
         name='seller-notifications-unread-count',
     ),
     path(
+        'seller/notifications/read-all',
+        SellerNotificationsReadAllView.as_view(),
+        name='seller-notifications-read-all',
+    ),
+    path(
         'seller/notifications/<uuid:notification_id>/read',
         SellerNotificationReadView.as_view(),
         name='seller-notification-read',
@@ -169,6 +186,31 @@ urlpatterns = [
         name='seller-notifications',
     ),
     path('seller/devices/fcm-token', SellerFcmTokenView.as_view(), name='seller-fcm-token'),
+    path(
+        'seller/payments/config',
+        SellerRazorpayConfigView.as_view(),
+        name='seller-payments-config',
+    ),
+    path(
+        'seller/customers/<str:customer_id>/payments/create-order',
+        SellerCustomerRazorpayCreateOrderView.as_view(),
+        name='seller-customer-payments-create-order',
+    ),
+    path(
+        'seller/customers/<str:customer_id>/payments/verify',
+        SellerCustomerRazorpayVerifyView.as_view(),
+        name='seller-customer-payments-verify',
+    ),
+    path(
+        'seller/customers/<str:customer_id>/payments/create-link',
+        SellerCustomerPaymentLinkCreateView.as_view(),
+        name='seller-customer-payments-create-link',
+    ),
+    path(
+        'seller/customers/<str:customer_id>/payments/sync-links',
+        SellerCustomerPaymentLinksSyncView.as_view(),
+        name='seller-customer-payments-sync-links',
+    ),
     # Legacy sapp aliases
     path('sapp/signup/', SellerRegisterView.as_view(), name='legacy-seller-signup'),
     path('sapp/login/', SellerLoginView.as_view(), name='legacy-seller-login'),

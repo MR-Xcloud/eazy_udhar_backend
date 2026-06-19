@@ -7,6 +7,7 @@ from sellerapp.views.public_views import DayStatementPublicView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('admin-api/v1/', include('adminapp.urls')),
     path('sapp/', include('customerapp.urls')),
     path('capp/', include('sellerapp.urls')),
     path('<str:token>/', DayStatementPublicView.as_view(), name='day-statement-public'),

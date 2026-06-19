@@ -85,6 +85,7 @@ def ensure_customer_account(seller_customer, customer_user):
         account.outstanding_amount = seller_customer.outstanding_amount
         account.advance_deposited = seller_customer.advance_deposited
         account.advance_used = seller_customer.advance_used
+        account.next_due_date = seller_customer.next_due_date
         account.status = _map_status(seller_customer.status)
         account.has_balance = seller_customer.outstanding_amount > 0
         account.save()
@@ -100,6 +101,7 @@ def ensure_customer_account(seller_customer, customer_user):
         account.outstanding_amount = seller_customer.outstanding_amount
         account.advance_deposited = seller_customer.advance_deposited
         account.advance_used = seller_customer.advance_used
+        account.next_due_date = seller_customer.next_due_date
         account.save()
         return account
 
@@ -111,6 +113,7 @@ def ensure_customer_account(seller_customer, customer_user):
         outstanding_amount=seller_customer.outstanding_amount,
         advance_deposited=seller_customer.advance_deposited,
         advance_used=seller_customer.advance_used,
+        next_due_date=seller_customer.next_due_date,
         status=_map_status(seller_customer.status),
         has_balance=seller_customer.outstanding_amount > 0,
     )

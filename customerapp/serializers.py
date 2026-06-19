@@ -282,30 +282,52 @@ class StatementLineSerializer(serializers.ModelSerializer):
 
 
 class PaymentSerializer(serializers.ModelSerializer):
-    shop_id = serializers.UUIDField(write_only=True, required=False)
-    shop_ids = serializers.ListField(
-        child=serializers.UUIDField(), write_only=True, required=False
-    )
+    shop_id = serializers.SerializerMethodField()
+    shop_name = serializers.SerializerMethodField()
+    method_label = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomerPayment
         fields = [
             'id',
             'shop_id',
-            'shop_ids',
+            'shop_name',
             'amount',
             'method',
+            'method_label',
             'status',
+            'is_partial',
             'reference_id',
+            'razorpay_order_id',
+            'razorpay_payment_id',
             'created_at',
         ]
-        read_only_fields = ['id', 'status', 'reference_id', 'created_at']
+        read_only_fields = fields
+
+    def get_shop_id(self, obj):
+        return str(obj.account_id) if obj.account_id else None
+
+    def get_shop_name(self, obj):
+        return obj.account.shop_name if obj.account else None
+
+    def get_method_label(self, obj):
+        from easyudhar.payment_utils import payment_method_label
+
+        return payment_method_label(obj.method)
 
 
 class PaymentMethodSerializer(serializers.ModelSerializer):
     class Meta:
         model = PaymentMethod
-        fields = ['id', 'method_type', 'label', 'upi_id', 'is_default', 'created_at']
+        fields = [
+            'id',
+            'method_type',
+            'label',
+            'upi_id',
+            'account_ref',
+            'is_default',
+            'created_at',
+        ]
         read_only_fields = ['id', 'created_at']
 
 

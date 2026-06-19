@@ -8,8 +8,8 @@ from sellerapp.daily_sms import send_pending_digests
 
 class Command(BaseCommand):
     help = (
-        'Send one digest SMS per customer who had credit/payment activity on the given date. '
-        'Schedule nightly on Render cron, e.g. 21:00 IST.'
+        'Send one merged digest SMS per customer phone for the given date '
+        '(all shops combined). Schedule nightly on Render cron, e.g. 21:00 IST.'
     )
 
     def add_arguments(self, parser):
@@ -40,6 +40,8 @@ class Command(BaseCommand):
         )
         for row in results:
             status = 'SENT' if row.get('sent') else 'SKIP'
+            shops = row.get('shops', 1)
             self.stdout.write(
-                f"  [{status}] {row.get('customer')} — {row.get('error') or row.get('statement_url', '')}"
+                f"  [{status}] {row.get('customer')} ({shops} shop(s)) — "
+                f"{row.get('error') or row.get('statement_url', '')}"
             )

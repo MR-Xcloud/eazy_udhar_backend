@@ -24,11 +24,19 @@ from .views.customer_views import (
     HelpView,
     NotificationReadView,
     NotificationsListView,
+    NotificationsReadAllView,
     PaymentMethodsView,
     PaymentSummaryView,
     ProfileView,
     SettingsView,
     UnreadNotificationCountView,
+)
+from .views.payment_views import (
+    PaymentMethodsCatalogView,
+    RazorpayConfigView,
+    RazorpayCreateOrderView,
+    RazorpayVerifyPaymentView,
+    RazorpayWebhookView,
 )
 
 urlpatterns = [
@@ -67,9 +75,13 @@ urlpatterns = [
         ChatView.as_view(),
         name='customer-chat',
     ),
-    # Accounts — customer_account_screen
-    # Pay — customer_addicon_screen (summary before payments for correct routing)
+    # Pay — Razorpay checkout (demo direct pay disabled on POST /customer/payments)
     path('customer/payments/summary', PaymentSummaryView.as_view(), name='payments-summary'),
+    path('customer/payments/methods', PaymentMethodsCatalogView.as_view(), name='payments-methods'),
+    path('customer/payments/config', RazorpayConfigView.as_view(), name='payments-razorpay-config'),
+    path('customer/payments/create-order', RazorpayCreateOrderView.as_view(), name='payments-create-order'),
+    path('customer/payments/verify', RazorpayVerifyPaymentView.as_view(), name='payments-verify'),
+    path('customer/payments/webhook', RazorpayWebhookView.as_view(), name='payments-webhook'),
     path('customer/payments', CustomerPaymentsView.as_view(), name='customer-payments'),
     # Alerts — customer_notifications_screen
     path('customer/notifications', NotificationsListView.as_view(), name='notifications-list'),
@@ -77,6 +89,11 @@ urlpatterns = [
         'customer/notifications/<uuid:notification_id>/read',
         NotificationReadView.as_view(),
         name='notification-read',
+    ),
+    path(
+        'customer/notifications/read-all',
+        NotificationsReadAllView.as_view(),
+        name='customer-notifications-read-all',
     ),
     path('customer/payment-methods', PaymentMethodsView.as_view(), name='payment-methods'),
     # Profile — customer_profile_screen

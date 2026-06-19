@@ -1,7 +1,10 @@
+import json
 import logging
+import re
+import time
 from decimal import Decimal
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import urlopen
 
 from django.conf import settings
@@ -9,6 +12,8 @@ from django.conf import settings
 from customerapp.messaging import normalize_phone
 
 logger = logging.getLogger(__name__)
+
+NIMBUS_API_HOST = 'http://nimbusit.net/api'
 
 
 def _sms_print(message):
@@ -90,6 +95,65 @@ def _build_payment_text(amount, shop_name):
     )
 
 
+def _build_pushsms_params(*, mobile, text, template_id):
+    """Build query params exactly per Nimbus HTTP API docs (API Keys page)."""
+    params = {
+        'user': settings.NIMBUS_USER_ID,
+        'authkey': settings.NIMBUS_AUTH_KEY,
+        'sender': settings.NIMBUS_SENDER_ID,
+        'mobile': mobile,
+        'text': text,
+        'entityid': settings.NIMBUS_DLT_ENTITY_ID,
+        'templateid': template_id,
+        'rpt': '1',
+    }
+    category = getattr(settings, 'NIMBUS_SMS_CATEGORY', '').strip()
+    sub_category = getattr(settings, 'NIMBUS_SMS_SUB_CATEGORY', '').strip()
+    if category:
+        params['category'] = category
+    if sub_category:
+        params['subcategory'] = sub_category
+    extra_raw = getattr(settings, 'NIMBUS_SMS_EXTRA_PARAMS', '').strip()
+    if extra_raw:
+        for part in extra_raw.split('&'):
+            if '=' in part:
+                key, value = part.split('=', 1)
+                params[key.strip()] = value.strip()
+    return params
+
+
+def _pushsms_url(params):
+    """Nimbus docs: URL-encode message text before submit."""
+    base = settings.NIMBUS_API_URL.rstrip('/')
+    return f'{base}?{urlencode(params, quote_via=quote)}'
+
+
+def _parse_submit_uid(raw_response):
+    try:
+        payload = json.loads(raw_response)
+        return (payload.get('RESPONSE') or {}).get('UID', '')
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        match = re.search(r'"UID"\s*:\s*"([^"]+)"', raw_response or '')
+        return match.group(1) if match else ''
+
+
+def pull_delivery_report(*, reqid, mobile):
+    """Nimbus pullreport API — check DELIVRD vs FAILED after submit."""
+    phone = normalize_phone(mobile)
+    params = {
+        'user': settings.NIMBUS_USER_ID,
+        'authkey': settings.NIMBUS_AUTH_KEY,
+        'reqid': reqid,
+        'mobile': _format_mobile_for_api(phone),
+    }
+    url = f'{NIMBUS_API_HOST}/pullreport?{urlencode(params, quote_via=quote)}'
+    try:
+        with urlopen(url, timeout=settings.NIMBUS_REQUEST_TIMEOUT) as response:
+            return response.read().decode('utf-8', errors='replace').strip()
+    except (HTTPError, URLError) as exc:
+        return str(exc)
+
+
 def send_push_sms(*, mobile, text, template_id):
     """
     Call Nimbus pushsms API (GET).
@@ -131,38 +195,14 @@ def send_push_sms(*, mobile, text, template_id):
     if api_mobile != phone:
         _sms_print(f'API mobile (with prefix): {api_mobile}')
 
-    params = {
-        'user': settings.NIMBUS_USER_ID,
-        'authkey': settings.NIMBUS_AUTH_KEY,
-        'sender': settings.NIMBUS_SENDER_ID,
-        'mobile': api_mobile,
-        'text': text,
-        'entityid': settings.NIMBUS_DLT_ENTITY_ID,
-        'templateid': template_id,
-        'rpt': '1',
-    }
-    if settings.NIMBUS_PASSWORD:
-        params['password'] = settings.NIMBUS_PASSWORD
-
-    category = getattr(settings, 'NIMBUS_SMS_CATEGORY', '').strip()
-    sub_category = getattr(settings, 'NIMBUS_SMS_SUB_CATEGORY', '').strip()
-    if category:
-        params['category'] = category
-    if sub_category:
-        params['subcategory'] = sub_category
-        params['sub_category'] = sub_category
-
-    extra_raw = getattr(settings, 'NIMBUS_SMS_EXTRA_PARAMS', '').strip()
-    if extra_raw:
-        for part in extra_raw.split('&'):
-            if '=' in part:
-                key, value = part.split('=', 1)
-                params[key.strip()] = value.strip()
-
+    params = _build_pushsms_params(mobile=api_mobile, text=text, template_id=template_id)
+    category = params.get('category', '')
+    sub_category = params.get('subcategory', '')
     _sms_print(
-        f'Route: category={category or "-"} sub_category={sub_category or "-"} sender={settings.NIMBUS_SENDER_ID}'
+        f'Route: category={category or "(doc default)"} '
+        f'sub_category={sub_category or "(doc default)"} sender={settings.NIMBUS_SENDER_ID}'
     )
-    url = f'{settings.NIMBUS_API_URL.rstrip("/")}?{urlencode(params)}'
+    url = _pushsms_url(params)
 
     try:
         with urlopen(url, timeout=settings.NIMBUS_REQUEST_TIMEOUT) as response:
@@ -188,16 +228,26 @@ def send_push_sms(*, mobile, text, template_id):
         }
 
     sent = _response_indicates_success(body)
+    reqid = _parse_submit_uid(body)
     result = {
         'sent': sent,
-        'message_id': body if sent else '',
+        'message_id': reqid or (body if sent else ''),
+        'reqid': reqid,
         'error': '' if sent else body or 'SMS send failed',
         'raw_response': body,
     }
     if sent:
-        logger.info('Nimbus SMS submitted to %s template=%s', phone, template_id)
-        _sms_print(f'QUEUED — accepted by Nimbus API for {api_mobile} (check portal report for DELIVERED/FAILED)')
+        logger.info('Nimbus SMS submitted to %s template=%s reqid=%s', phone, template_id, reqid)
+        _sms_print(f'QUEUED — accepted by Nimbus API for {api_mobile} (reqid={reqid or "?"})')
         _sms_print(f'Nimbus response: {body}')
+        if reqid:
+            time.sleep(3)
+            report = pull_delivery_report(reqid=reqid, mobile=phone)
+            result['delivery_report'] = report
+            _sms_print(f'Delivery report: {report}')
+            if report and 'FAILED' in report.upper():
+                result['sent'] = False
+                result['error'] = report
     else:
         logger.warning('Nimbus SMS failed to %s: %s', phone, body)
         _sms_print(f'FAILED — Nimbus response: {body}')
@@ -226,22 +276,27 @@ def send_reminder_sms(*, seller, customer, message):
     )
     template_id = getattr(settings, 'NIMBUS_REMINDER_TEMPLATE_ID', '').strip()
     if not template_id:
+        err = 'Reminder SMS template not configured (NIMBUS_REMINDER_TEMPLATE_ID).'
+        _sms_print(f'SKIPPED — {err}')
         return {
             'sent': False,
             'message_id': '',
-            'error': 'Reminder SMS template not configured (NIMBUS_REMINDER_TEMPLATE_ID).',
+            'error': err,
             'raw_response': '',
         }
+    # DLT {#var#} slots are max ~30 chars on Jio; full statement URLs fail (1561).
+    # Third var uses platform name (same pattern as CREDIT3/PAYMENT3). Statement link
+    # is still sent via in-app notification / push on remind.
     text = _apply_template(
         getattr(
             settings,
             'NIMBUS_REMINDER_SMS_TEXT',
-            'Reminder: Rs. {#var#} outstanding at {#var#}. Dear {#var#}, please pay. - EAZYUDHAR',
+            'Payment Reminder: Balance of Rs. {#var#} is pending with {#var#} . View details on: {#var#} - EAZYUDHAR by INWIZY',
         ),
         [
             _format_amount(customer.outstanding_amount),
             seller.business_name,
-            customer.name,
+            settings.NIMBUS_SMS_PLATFORM_NAME,
         ],
     )
     return send_push_sms(
@@ -294,30 +349,14 @@ def send_payment_sms(*, seller, customer, amount, balance=None, payment_method='
     )
 
 
-def _build_daily_credit_text(amount, shop_name, statement_url):
-    """Nightly digest — third {#var#} is the customer's day-statement link."""
-    return _apply_template(
-        settings.NIMBUS_CREDIT_SMS_TEXT,
-        [
-            _format_amount(amount),
-            shop_name,
-            statement_url,
-        ],
-        raw_var_indices={2},
-    )
+def _build_daily_credit_text(amount, shop_name):
+    """Nightly digest — var3 is platform name (DLT 30-char limit; no URL in SMS)."""
+    return _build_credit_text(amount, shop_name)
 
 
-def _build_daily_payment_text(amount, shop_name, statement_url):
-    """Nightly digest — third {#var#} is the customer's day-statement link."""
-    return _apply_template(
-        settings.NIMBUS_PAYMENT_SMS_TEXT,
-        [
-            _format_amount(amount),
-            shop_name,
-            statement_url,
-        ],
-        raw_var_indices={2},
-    )
+def _build_daily_payment_text(amount, shop_name):
+    """Nightly digest — var3 is platform name (DLT 30-char limit; no URL in SMS)."""
+    return _build_payment_text(amount, shop_name)
 
 
 def _build_otp_text(otp):
@@ -339,8 +378,7 @@ def send_otp_sms(*, mobile, otp):
 
 def send_daily_digest_sms(*, seller, customer, digest):
     """
-    One SMS per customer per night summarizing the day's credit/payment activity.
-    Uses CREDIT template if any credit today, else PAYMENT template.
+    Legacy single-shop digest sender. Nightly cron uses send_merged_nightly_digest_sms instead.
     """
     from .daily_sms import statement_link
 
@@ -351,12 +389,12 @@ def send_daily_digest_sms(*, seller, customer, digest):
 
     if has_credit:
         amount = digest.credit_total
-        text = _build_daily_credit_text(amount, shop_name, link)
+        text = _build_daily_credit_text(amount, shop_name)
         template_id = settings.NIMBUS_CREDIT_TEMPLATE_ID
         kind = 'CREDIT DIGEST'
     elif has_payment:
         amount = digest.payment_total
-        text = _build_daily_payment_text(amount, shop_name, link)
+        text = _build_daily_payment_text(amount, shop_name)
         template_id = settings.NIMBUS_PAYMENT_TEMPLATE_ID
         kind = 'PAYMENT DIGEST'
     else:
@@ -373,6 +411,46 @@ def send_daily_digest_sms(*, seller, customer, digest):
     )
     return send_push_sms(
         mobile=customer.phone,
+        text=text,
+        template_id=template_id,
+    )
+
+
+def send_merged_nightly_digest_sms(*, phone, digests, nightly, credit_total, payment_total):
+    """
+    One SMS per customer phone summarizing all shop activity for the day.
+    Uses CREDIT template when any credit today, else PAYMENT template.
+    """
+    from .daily_sms import merged_shop_label, statement_link
+
+    link = statement_link(nightly.token)
+    shop_name = merged_shop_label(digests)
+    customer_name = digests[0].seller_customer.name if digests else ''
+
+    if credit_total > 0:
+        amount = credit_total
+        text = _build_daily_credit_text(amount, shop_name)
+        template_id = settings.NIMBUS_CREDIT_TEMPLATE_ID
+        kind = 'MERGED CREDIT DIGEST'
+    elif payment_total > 0:
+        amount = payment_total
+        text = _build_daily_payment_text(amount, shop_name)
+        template_id = settings.NIMBUS_PAYMENT_TEMPLATE_ID
+        kind = 'MERGED PAYMENT DIGEST'
+    else:
+        return {
+            'sent': False,
+            'message_id': '',
+            'error': 'No credit or payment activity for merged digest',
+            'raw_response': '',
+        }
+
+    _sms_print(
+        f'{kind} SMS — customer={customer_name!r} phone={phone!r} '
+        f'amount={amount} shops={len(digests)} date={nightly.activity_date} link={link!r}'
+    )
+    return send_push_sms(
+        mobile=phone,
         text=text,
         template_id=template_id,
     )

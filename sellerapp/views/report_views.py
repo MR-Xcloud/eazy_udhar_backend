@@ -7,7 +7,8 @@ from rest_framework.views import APIView
 from ..authentication import SellerJWTAuthentication
 from ..models import LedgerTransaction, SellerCustomer
 from ..permissions import IsSeller
-from ..services import reports_overview, transaction_item
+from ..services import customer_statement_report, reports_overview, transaction_item
+from ..services import _customer_due_fields
 from ..utils import format_inr, get_seller_customer
 
 
@@ -48,8 +49,9 @@ class ReportsDueView(SellerReportView):
         customers = SellerCustomer.objects.filter(
             seller=request.user, outstanding_amount__gt=0
         )
-        rows = [
-            {
+        rows = []
+        for c in customers:
+            row = {
                 'customer_id': str(c.id),
                 'name': c.name,
                 'phone': c.phone,
@@ -57,8 +59,8 @@ class ReportsDueView(SellerReportView):
                 'outstanding_display': format_inr(c.outstanding_amount),
                 'status': c.status,
             }
-            for c in customers
-        ]
+            row.update(_customer_due_fields(c))
+            rows.append(row)
         return Response(
             {
                 'report': 'due',
@@ -111,12 +113,7 @@ class ReportsMonthlySummaryView(SellerReportView):
 class CustomerStatementReportView(SellerReportView):
     def get(self, request, customer_id):
         customer = get_seller_customer(request.user, customer_id)
-        txs = LedgerTransaction.objects.filter(customer=customer)
-        return Response(
-            {
-                'report': 'customer_statement',
-                'customer': customer.name,
-                'outstanding': float(customer.outstanding_amount),
-                'transactions': [transaction_item(tx) for tx in txs],
-            }
-        )
+        seller = request.user
+        data = customer_statement_report(customer)
+        data['shop_name'] = seller.business_name or seller.full_name or 'EazyUdhar'
+        return Response(data)

@@ -66,6 +66,20 @@ def send_customer_reminder(
     Send reminder on requested channels.
     Returns dict with sms/whatsapp/push results per app contract.
     """
+    if customer.outstanding_amount <= 0:
+        mobile_display = _format_mobile_e164(customer.phone)
+        skipped = {
+            'sent': False,
+            'error': 'No outstanding balance',
+            'skipped': True,
+        }
+        return {
+            'message': 'Customer has no outstanding balance to remind.',
+            'sms': {**skipped, 'channel': 'sms', 'to': mobile_display},
+            'whatsapp': {**skipped, 'channel': 'whatsapp', 'to': mobile_display},
+            'push': {**skipped, 'channel': 'push', 'to': ''},
+        }
+
     message = message or _build_reminder_message(customer, seller)
     mobile_display = _format_mobile_e164(customer.phone)
     results = {}

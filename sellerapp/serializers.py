@@ -15,6 +15,7 @@ from .models import (
     SellerSettings,
     TeamMember,
 )
+from .payment_fields import PaymentMethodField
 from .utils import parse_client_uuid, seller_customer_phone_exists, seller_to_dict
 
 
@@ -209,7 +210,7 @@ class ClientIdMixin(serializers.Serializer):
 class ReceivePaymentSerializer(ClientIdMixin):
     customer_id = CustomerRefField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
-    payment_method = serializers.CharField(default='UPI')
+    payment_method = PaymentMethodField(default='cash')
     note = serializers.CharField(required=False, allow_blank=True, default='')
     send_sms = serializers.BooleanField(required=False, default=None, allow_null=True)
 
@@ -218,13 +219,14 @@ class AddCreditSerializer(ClientIdMixin):
     customer_id = CustomerRefField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     note = serializers.CharField(required=False, allow_blank=True, default='')
+    due_date = serializers.DateField(required=False, allow_null=True)
     send_sms = serializers.BooleanField(required=False, default=None, allow_null=True)
 
 
 class AdvanceDepositSerializer(ClientIdMixin):
     customer_id = CustomerRefField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0.01'))
-    payment_method = serializers.CharField(default='UPI')
+    payment_method = PaymentMethodField(default='upi')
     note = serializers.CharField(required=False, allow_blank=True, default='')
 
 
@@ -252,6 +254,7 @@ class SyncOperationSerializer(serializers.Serializer):
         'note',
         'payment_method',
         'send_sms',
+        'due_date',
         'customer_id',
         'customer_client_id',
     )

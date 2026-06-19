@@ -1,6 +1,7 @@
 import uuid
 from decimal import Decimal, InvalidOperation
 
+from easyudhar.payment_utils import normalize_payment_method
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -201,7 +202,7 @@ def _attach_tx_meta(tx, *, client_id=None, device_created_at=None):
 
 
 def apply_credit_idempotent(
-    seller, customer, amount, *, client_id=None, device_created_at=None, note='', send_sms=None
+    seller, customer, amount, *, client_id=None, device_created_at=None, note='', send_sms=None, due_date=None
 ):
     client_uuid = _parse_client_uuid(client_id) if client_id else None
     if client_uuid:
@@ -217,6 +218,7 @@ def apply_credit_idempotent(
         send_sms=send_sms,
         client_id=client_uuid,
         device_created_at=_parse_device_created_at(device_created_at),
+        due_date=due_date,
     )
     return tx, False, sms
 
@@ -242,7 +244,7 @@ def apply_payment_idempotent(
         seller,
         customer,
         amount,
-        payment_method=payment_method,
+        payment_method=normalize_payment_method(payment_method, default='upi'),
         note=note,
         send_sms=send_sms,
         client_id=client_uuid,
@@ -271,7 +273,7 @@ def apply_advance_deposit_idempotent(
         seller,
         customer,
         amount,
-        payment_method=payment_method,
+        payment_method=normalize_payment_method(payment_method, default='upi'),
         note=note,
         client_id=client_uuid,
         device_created_at=_parse_device_created_at(device_created_at),
@@ -455,6 +457,7 @@ def _process_operation(seller, op, payload, client_id, id_map):
             device_created_at=payload.get('device_created_at'),
             note=payload.get('note', ''),
             send_sms=payload.get('send_sms'),
+            due_date=payload.get('due_date'),
         )
     elif op in ('receive', 'receive_payment', 'payment'):
         tx, duplicate, _sms = apply_payment_idempotent(

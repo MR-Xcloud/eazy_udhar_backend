@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from django.contrib.auth.models import AbstractUser
 from django.db import models
@@ -72,6 +73,7 @@ class SellerCustomer(models.Model):
     advance_deposited = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     advance_used = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    next_due_date = models.DateField(null=True, blank=True)
     linked_customer = models.ForeignKey(
         'customerapp.Customer',
         on_delete=models.SET_NULL,
@@ -110,6 +112,10 @@ class SellerCustomer(models.Model):
 
     @property
     def is_overdue(self):
+        if self.outstanding_amount <= 0:
+            return False
+        if self.next_due_date:
+            return self.next_due_date < timezone.localdate()
         return self.status == self.STATUS_OVERDUE
 
     @property
@@ -138,6 +144,7 @@ class LedgerTransaction(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     note = models.TextField(blank=True)
     payment_method = models.CharField(max_length=50, blank=True)
+    due_date = models.DateField(null=True, blank=True)
     client_id = models.UUIDField(null=True, blank=True, db_index=True)
     device_created_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -366,6 +373,123 @@ class CustomerDayDigest(models.Model):
             f'{self.seller_customer.name} — {self.activity_date} '
             f'({self.transaction_count} txns)'
         )
+
+
+class CustomerNightlyDigest(models.Model):
+    """One merged nightly SMS per customer phone per day (all shops combined)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    phone = models.CharField(max_length=10, db_index=True)
+    activity_date = models.DateField()
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    sms_sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['phone', 'activity_date']]
+        ordering = ['-activity_date']
+
+    def __str__(self):
+        return f'{self.phone} — {self.activity_date}'
+
+
+class SellerRazorpayOrder(models.Model):
+    """Seller-initiated Razorpay checkout to record payment on customer ledger."""
+
+    STATUS_PENDING = 'pending'
+    STATUS_PAID = 'paid'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    seller = models.ForeignKey(Seller, on_delete=models.CASCADE, related_name='razorpay_orders')
+    customer = models.ForeignKey(
+        SellerCustomer, on_delete=models.CASCADE, related_name='razorpay_orders'
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default='INR')
+    note = models.TextField(blank=True)
+    reference_id = models.CharField(max_length=100, unique=True)
+    razorpay_order_id = models.CharField(max_length=100, unique=True, db_index=True)
+    razorpay_payment_id = models.CharField(max_length=100, blank=True)
+    payment_method = models.CharField(max_length=20, blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.reference_id} — {self.customer.name} ({self.status})'
+
+
+class SellerPaymentLink(models.Model):
+    """Razorpay payment link — customer can pay up to max_amount (partial allowed)."""
+
+    STATUS_ACTIVE = 'active'
+    STATUS_PARTIAL = 'partial'
+    STATUS_PAID = 'paid'
+    STATUS_EXPIRED = 'expired'
+    STATUS_CANCELLED = 'cancelled'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Active'),
+        (STATUS_PARTIAL, 'Partially paid'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_EXPIRED, 'Expired'),
+        (STATUS_CANCELLED, 'Cancelled'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    seller = models.ForeignKey(Seller, on_delete=models.CASCADE, related_name='payment_links')
+    customer = models.ForeignKey(
+        SellerCustomer, on_delete=models.CASCADE, related_name='payment_links'
+    )
+    max_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    amount_received = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    note = models.TextField(blank=True)
+    reference_id = models.CharField(max_length=100, unique=True)
+    razorpay_payment_link_id = models.CharField(max_length=100, unique=True, db_index=True)
+    short_url = models.URLField(max_length=500)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    expire_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    @property
+    def amount_remaining(self):
+        return max(self.max_amount - self.amount_received, Decimal('0'))
+
+    def __str__(self):
+        return f'{self.reference_id} — {self.customer.name} ({self.status})'
+
+
+class SellerPaymentLinkPayment(models.Model):
+    """Individual Razorpay payment against a seller payment link (idempotency)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_link = models.ForeignKey(
+        SellerPaymentLink, on_delete=models.CASCADE, related_name='payments'
+    )
+    razorpay_payment_id = models.CharField(max_length=100, unique=True, db_index=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    payment_method = models.CharField(max_length=20, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.razorpay_payment_id} — Rs.{self.amount}'
 
 
 class SellerDeviceToken(models.Model):

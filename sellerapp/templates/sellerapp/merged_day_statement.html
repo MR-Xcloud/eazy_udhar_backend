@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EAZYUDHAR — Daily Statement</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #f4f6f8;
+      color: #1a1a1a;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 480px; margin: 0 auto; padding: 16px; }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+      margin-bottom: 16px;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 4px; }
+    h2 { font-size: 1rem; margin: 0 0 12px; }
+    h3 { font-size: .95rem; margin: 0 0 8px; }
+    .muted { color: #666; font-size: .9rem; }
+    .summary {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .summary div {
+      background: #f8fafc;
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .summary label { display: block; font-size: .75rem; color: #666; }
+    .summary strong { font-size: 1rem; }
+    .highlight { background: #eff6ff; border: 1px solid #dbeafe; }
+    .highlight strong { color: #1d4ed8; }
+    .shop-block { margin-top: 20px; padding-top: 16px; border-top: 1px solid #eee; }
+    .shop-block:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+    .txn {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 14px 0;
+      border-bottom: 1px solid #eee;
+      gap: 12px;
+    }
+    .txn:last-child { border-bottom: none; }
+    .txn-title { font-weight: 600; }
+    .txn-note { font-size: .85rem; color: #666; margin-top: 2px; }
+    .amount { font-weight: 700; white-space: nowrap; }
+    .footer { text-align: center; font-size: .8rem; color: #888; padding: 8px 0 24px; }
+    .empty { text-align: center; padding: 40px 20px; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    {% if empty %}
+    <div class="card empty">
+      <h1>No transactions found</h1>
+      <p class="muted">This statement link is not available.</p>
+    </div>
+    {% else %}
+    <div class="card">
+      <h1>Today's activity</h1>
+      <div class="muted">{{ customer_name }} · {{ activity_date }}</div>
+      <div class="summary">
+        <div class="highlight">
+          <label>Credit today (all shops)</label>
+          <strong>{{ day_totals.credit_total }}</strong>
+        </div>
+        <div class="highlight">
+          <label>Payment today (all shops)</label>
+          <strong>{{ day_totals.payment_total }}</strong>
+        </div>
+        <div>
+          <label>Transactions</label>
+          <strong>{{ day_totals.transaction_count }}</strong>
+        </div>
+        <div>
+          <label>Shops</label>
+          <strong>{{ day_totals.shop_count }}</strong>
+        </div>
+      </div>
+    </div>
+
+    {% for shop in shops %}
+    <div class="card">
+      <div class="shop-block">
+        <h2>{{ shop.shop_name }}</h2>
+        <div class="muted">{{ shop.customer_name }}</div>
+        <div class="summary" style="margin-top:12px;">
+          <div>
+            <label>Outstanding now</label>
+            <strong>{{ shop.lifetime.outstanding }}</strong>
+          </div>
+          <div>
+            <label>Advance balance</label>
+            <strong>{{ shop.lifetime.advance_balance }}</strong>
+          </div>
+        </div>
+
+        {% if shop.today.transaction_count > 0 %}
+        <h3 style="margin-top:16px;">Today at this shop</h3>
+        <div class="summary" style="margin-top:0;">
+          <div>
+            <label>Credit</label>
+            <strong>{{ shop.today.credit_total }}</strong>
+          </div>
+          <div>
+            <label>Payment</label>
+            <strong>{{ shop.today.payment_total }}</strong>
+          </div>
+        </div>
+        {% for tx in shop.today.transactions %}
+        <div class="txn">
+          <div>
+            <div class="txn-title">{{ tx.label }}</div>
+            <div class="muted">{{ tx.time }}{% if tx.payment_method %} · {{ tx.payment_method }}{% endif %}</div>
+            {% if tx.note %}<div class="txn-note">{{ tx.note }}</div>{% endif %}
+          </div>
+          <div class="amount">{{ tx.amount_display }}</div>
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    <div class="footer">EAZYUDHAR by INWIZY</div>
+  </div>
+</body>
+</html>
