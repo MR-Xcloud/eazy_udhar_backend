@@ -1,14 +1,76 @@
 """Razorpay Route — route customer payments to each seller's linked bank account."""
 
+import logging
 from decimal import Decimal
 
 from django.conf import settings
 
 from customerapp.razorpay_service import RazorpayError, _amount_paise, _razorpay_request
 
+logger = logging.getLogger(__name__)
+
 
 def route_enabled():
     return getattr(settings, 'RAZORPAY_ROUTE_ENABLED', True)
+
+
+def is_route_api_unavailable_error(exc):
+    """True when merchant account does not have Razorpay Route enabled."""
+    if not isinstance(exc, RazorpayError):
+        return False
+    if exc.code not in ('api_error', 'route_account_failed'):
+        return False
+    message = (exc.message or '').lower()
+    return any(
+        phrase in message
+        for phrase in (
+            'not found on the server',
+            'route is not enabled',
+            'feature is not enabled',
+            'feature not enabled',
+            'access is denied',
+        )
+    )
+
+
+def resolve_order_transfers(*, by_seller=None, seller=None, amount=None):
+    """
+    Build Route transfers when configured. If Route API is unavailable on the
+    merchant account, fall back to standard checkout (no transfers).
+    Returns (transfers, route_payout_used).
+    """
+    if not route_enabled():
+        return [], False
+
+    pay_amount = None
+    if by_seller is not None:
+        pay_amount = sum(by_seller.values(), Decimal('0'))
+    elif amount is not None:
+        pay_amount = Decimal(str(amount))
+    else:
+        return [], False
+
+    expected_paise = _amount_paise(pay_amount)
+
+    try:
+        if by_seller is not None:
+            transfers, total = build_transfers_for_sellers(by_seller)
+        else:
+            transfers, total = transfers_for_single_seller(seller, pay_amount)
+        if total != expected_paise:
+            raise RazorpayError(
+                'Payout split does not match payment amount.',
+                code='transfer_mismatch',
+            )
+        return transfers, True
+    except RazorpayError as exc:
+        if is_route_api_unavailable_error(exc):
+            logger.warning(
+                'Razorpay Route unavailable; creating order without seller transfers: %s',
+                exc.message,
+            )
+            return [], False
+        raise
 
 
 def resolve_seller_for_account(account):

@@ -49,20 +49,14 @@ def create_seller_razorpay_order(*, seller, customer, amount, note=''):
 
     from easyudhar.razorpay_route import (
         attach_transfers_to_order_payload,
-        transfers_for_single_seller,
+        resolve_order_transfers,
     )
 
-    transfers, transfer_total = transfers_for_single_seller(seller, pay_amount)
-    order_amount_paise = _amount_paise(pay_amount)
-    if transfer_total != order_amount_paise:
-        raise RazorpayError(
-            'Payout split does not match payment amount.',
-            code='transfer_mismatch',
-        )
+    transfers, route_payout = resolve_order_transfers(seller=seller, amount=pay_amount)
 
     order_payload = attach_transfers_to_order_payload(
         {
-            'amount': order_amount_paise,
+            'amount': _amount_paise(pay_amount),
             'currency': 'INR',
             'receipt': reference_id,
             'notes': {
@@ -94,6 +88,8 @@ def create_seller_razorpay_order(*, seller, customer, amount, note=''):
         'max_payable': str(customer.outstanding_amount),
         'is_partial': pay_amount < customer.outstanding_amount,
         'partial_payment_allowed': True,
+        'route_payout': route_payout,
+        'payout_mode': 'route' if route_payout else 'platform',
     }
 
 
