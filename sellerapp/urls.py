@@ -50,6 +50,12 @@ from .views.seller_views import (
     TeamView,
     UnifiedTransactionView,
 )
+from .views.subscription_views import (
+    SellerSubscriptionCreateOrderView,
+    SellerSubscriptionPlansView,
+    SellerSubscriptionStatusView,
+    SellerSubscriptionVerifyView,
+)
 
 urlpatterns = [
     # P0 — Auth
@@ -62,6 +68,26 @@ urlpatterns = [
     path('auth/logout', LogoutView.as_view(), name='seller-logout'),
     # P0 — Home & customers
     path('seller/me', SellerMeView.as_view(), name='seller-me'),
+    path(
+        'seller/subscription',
+        SellerSubscriptionStatusView.as_view(),
+        name='seller-subscription-status',
+    ),
+    path(
+        'seller/subscription/plans',
+        SellerSubscriptionPlansView.as_view(),
+        name='seller-subscription-plans',
+    ),
+    path(
+        'seller/subscription/create-order',
+        SellerSubscriptionCreateOrderView.as_view(),
+        name='seller-subscription-create-order',
+    ),
+    path(
+        'seller/subscription/verify',
+        SellerSubscriptionVerifyView.as_view(),
+        name='seller-subscription-verify',
+    ),
     path('seller/dashboard', SellerDashboardView.as_view(), name='seller-dashboard'),
     path('seller/sync/push', SellerSyncPushView.as_view(), name='seller-sync-push'),
     path('seller/sync/changes', SellerSyncChangesView.as_view(), name='seller-sync-changes'),

@@ -5,6 +5,8 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from easyudhar.jwt_serializers import build_token_refresh_serializer
+from ..models import AdminUser
 from ..serializers import AdminLoginSerializer
 from ..utils import admin_user_to_dict
 from .base import AdminAPIView
@@ -43,6 +45,7 @@ class AdminMeView(AdminAPIView):
 class AdminTokenRefreshView(TokenRefreshView):
     permission_classes = [AllowAny]
     authentication_classes = []
+    serializer_class = build_token_refresh_serializer(AdminUser)
 
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)

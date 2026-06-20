@@ -216,6 +216,7 @@ class CustomerAccountSerializer(serializers.ModelSerializer):
     deposited = serializers.SerializerMethodField()
     used = serializers.SerializerMethodField()
     balance_available = serializers.SerializerMethodField()
+    seller_upi_id = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomerAccount
@@ -240,6 +241,7 @@ class CustomerAccountSerializer(serializers.ModelSerializer):
             'deposited',
             'used',
             'balance_available',
+            'seller_upi_id',
         ]
 
     def get_overdue(self, obj):
@@ -273,6 +275,14 @@ class CustomerAccountSerializer(serializers.ModelSerializer):
 
     def get_balance_available(self, obj):
         return float(obj.advance_balance)
+
+    def get_seller_upi_id(self, obj):
+        seller = obj.seller
+        if seller is None and obj.seller_customer_id:
+            seller = getattr(obj.seller_customer, 'seller', None)
+        if seller is None:
+            return ''
+        return (seller.upi_id or '').strip()
 
 
 class StatementLineSerializer(serializers.ModelSerializer):
@@ -335,6 +345,7 @@ class NotificationSerializer(serializers.ModelSerializer):
     type = serializers.CharField(source='notification_type')
     time = serializers.DateTimeField(source='created_at', read_only=True)
     shop_id = serializers.SerializerMethodField()
+    shop_name = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomerNotification
@@ -344,6 +355,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             'title',
             'subtitle',
             'shop_id',
+            'shop_name',
             'reference_id',
             'time',
             'is_read',
@@ -353,6 +365,11 @@ class NotificationSerializer(serializers.ModelSerializer):
     def get_shop_id(self, obj):
         if obj.shop_account_id:
             return str(obj.shop_account_id)
+        return None
+
+    def get_shop_name(self, obj):
+        if obj.shop_account_id:
+            return obj.shop_account.shop_name
         return None
 
 

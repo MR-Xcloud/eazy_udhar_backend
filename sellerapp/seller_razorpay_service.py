@@ -46,11 +46,23 @@ def create_seller_razorpay_order(*, seller, customer, amount, note=''):
 
     pay_amount = _validate_amount(customer, amount)
     reference_id = f'SPAY-{uuid.uuid4().hex[:12].upper()}'
-    rz_order = _razorpay_request(
-        'POST',
-        '/orders',
+
+    from easyudhar.razorpay_route import (
+        attach_transfers_to_order_payload,
+        transfers_for_single_seller,
+    )
+
+    transfers, transfer_total = transfers_for_single_seller(seller, pay_amount)
+    order_amount_paise = _amount_paise(pay_amount)
+    if transfer_total != order_amount_paise:
+        raise RazorpayError(
+            'Payout split does not match payment amount.',
+            code='transfer_mismatch',
+        )
+
+    order_payload = attach_transfers_to_order_payload(
         {
-            'amount': _amount_paise(pay_amount),
+            'amount': order_amount_paise,
             'currency': 'INR',
             'receipt': reference_id,
             'notes': {
@@ -58,7 +70,9 @@ def create_seller_razorpay_order(*, seller, customer, amount, note=''):
                 'customer_id': str(customer.id),
             },
         },
+        transfers,
     )
+    rz_order = _razorpay_request('POST', '/orders', order_payload)
 
     SellerRazorpayOrder.objects.create(
         seller=seller,
@@ -205,6 +219,16 @@ def create_seller_payment_link(*, seller, customer, max_amount, note=''):
     email = (customer.email or '').strip()
     if email:
         payload['customer']['email'] = email
+
+    from easyudhar.razorpay_route import (
+        attach_transfers_to_payment_link_payload,
+        transfers_for_single_seller,
+    )
+
+    transfers, transfer_total = transfers_for_single_seller(
+        seller, pay_max, percentage=True
+    )
+    payload = attach_transfers_to_payment_link_payload(payload, transfers)
 
     rz_link = _razorpay_request('POST', '/payment_links', payload)
     short_url = rz_link.get('short_url', '')

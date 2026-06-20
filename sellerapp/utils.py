@@ -18,6 +18,8 @@ def tokens_for_seller(user):
 
 
 def seller_to_dict(user):
+    from .subscription_service import subscription_status_payload
+
     return {
         'id': str(user.id),
         'name': user.full_name,
@@ -25,6 +27,7 @@ def seller_to_dict(user):
         'mobile': user.phone,
         'business_name': user.business_name,
         'role': user.role,
+        'subscription': subscription_status_payload(user),
     }
 
 

@@ -17,6 +17,12 @@ class Seller(AbstractUser):
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default=ROLE_SELLER)
     address = models.TextField(blank=True)
     gst_number = models.CharField(max_length=20, blank=True)
+    upi_id = models.CharField(max_length=100, blank=True)
+    bank_account_number = models.CharField(max_length=30, blank=True)
+    bank_ifsc = models.CharField(max_length=20, blank=True)
+    bank_account_holder = models.CharField(max_length=120, blank=True)
+    razorpay_linked_account_id = models.CharField(max_length=100, blank=True)
+    razorpay_route_status = models.CharField(max_length=50, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -428,6 +434,49 @@ class SellerRazorpayOrder(models.Model):
 
     def __str__(self):
         return f'{self.reference_id} — {self.customer.name} ({self.status})'
+
+
+class SellerSubscriptionOrder(models.Model):
+    """Platform subscription checkout — settles to EazyUdhar merchant account (no Route)."""
+
+    STATUS_PENDING = 'pending'
+    STATUS_PAID = 'paid'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    CYCLE_MONTHLY = 'monthly'
+    CYCLE_YEARLY = 'yearly'
+    CYCLE_CHOICES = [
+        (CYCLE_MONTHLY, 'Monthly'),
+        (CYCLE_YEARLY, 'Yearly'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    seller = models.ForeignKey(
+        Seller, on_delete=models.CASCADE, related_name='subscription_orders'
+    )
+    plan_slug = models.CharField(max_length=100)
+    plan_name = models.CharField(max_length=100)
+    billing_cycle = models.CharField(max_length=10, choices=CYCLE_CHOICES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default='INR')
+    reference_id = models.CharField(max_length=100, unique=True)
+    razorpay_order_id = models.CharField(max_length=100, unique=True, db_index=True)
+    razorpay_payment_id = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.reference_id} — {self.plan_name} ({self.status})'
 
 
 class SellerPaymentLink(models.Model):

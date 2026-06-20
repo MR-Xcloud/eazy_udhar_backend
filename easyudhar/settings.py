@@ -397,6 +397,13 @@ RAZORPAY_LIVE_KEY_ID = os.environ.get('RAZORPAY_LIVE_KEY_ID', '').strip()
 RAZORPAY_LIVE_KEY_SECRET = os.environ.get('RAZORPAY_LIVE_KEY_SECRET', '').strip()
 RAZORPAY_LIVE_WEBHOOK_SECRET = os.environ.get('RAZORPAY_LIVE_WEBHOOK_SECRET', '').strip()
 
+# Route: 100% of online payments settle to seller linked bank (not platform merchant balance).
+RAZORPAY_ROUTE_ENABLED = os.environ.get('RAZORPAY_ROUTE_ENABLED', 'true').strip().lower() in (
+    '1',
+    'true',
+    'yes',
+)
+
 
 def _configure_sqlite_connection(sender, connection, **kwargs):
     if connection.vendor == 'sqlite':

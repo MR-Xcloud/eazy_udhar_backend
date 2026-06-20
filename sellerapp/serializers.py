@@ -43,9 +43,19 @@ class SellerRegisterSerializer(serializers.ModelSerializer):
     mobile = serializers.CharField(source='phone')
     role = serializers.CharField(required=False, default=Seller.ROLE_SELLER)
 
+    upi_id = serializers.CharField(max_length=100, required=False, allow_blank=True)
+
     class Meta:
         model = Seller
-        fields = ['name', 'email', 'mobile', 'password', 'role', 'business_name']
+        fields = [
+            'name',
+            'email',
+            'mobile',
+            'password',
+            'role',
+            'business_name',
+            'upi_id',
+        ]
         extra_kwargs = {
             'password': {'write_only': True},
             'business_name': {'required': False},
@@ -70,6 +80,9 @@ class SellerRegisterSerializer(serializers.ModelSerializer):
             **validated_data,
         )
         SellerSettings.objects.get_or_create(seller=user)
+        from ..subscription_service import start_seller_trial
+
+        start_seller_trial(user)
         return user
 
 
@@ -377,8 +390,34 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             'email',
             'address',
             'gst_number',
+            'upi_id',
+            'bank_account_number',
+            'bank_ifsc',
+            'bank_account_holder',
+            'razorpay_route_status',
         ]
-        read_only_fields = ['email']
+        read_only_fields = ['email', 'razorpay_route_status']
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        bank_fields = {
+            'bank_account_number',
+            'bank_ifsc',
+            'bank_account_holder',
+        }
+        if bank_fields.intersection(validated_data.keys()):
+            from easyudhar.razorpay_route import (
+                ensure_seller_linked_account,
+                seller_payout_ready,
+            )
+
+            if seller_payout_ready(instance):
+                try:
+                    ensure_seller_linked_account(instance)
+                    instance.refresh_from_db(fields=['razorpay_route_status'])
+                except Exception:
+                    pass
+        return instance
 
 
 class TeamMemberSerializer(serializers.ModelSerializer):

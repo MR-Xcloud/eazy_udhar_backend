@@ -63,8 +63,39 @@ class SellerAPIView(APIView):
     permission_classes = [IsSeller]
 
 
+def _quota_error_response(exc):
+    return Response(
+        {
+            'message': exc.message,
+            'code': exc.code,
+            'quota': exc.quota,
+        },
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _with_quota(payload, seller):
+    from ..subscription_service import message_quota_dict
+
+    payload['quota'] = message_quota_dict(seller)
+    return payload
+
+
+def _require_message_quota(seller, count=1):
+    from ..subscription_service import SubscriptionQuotaError, assert_can_send_messages
+
+    try:
+        assert_can_send_messages(seller, count=count)
+    except SubscriptionQuotaError as exc:
+        return exc
+    return None
+
+
 class SellerMeView(SellerAPIView):
     def get(self, request):
+        from ..subscription_service import start_seller_trial
+
+        start_seller_trial(request.user)
         return Response({'user': seller_to_dict(request.user)})
 
 
@@ -274,6 +305,9 @@ class CustomerNotesView(SellerAPIView):
                 {'message': 'text is required'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        quota_err = _require_message_quota(request.user, count=1)
+        if quota_err:
+            return _quota_error_response(quota_err)
         msg = send_seller_message(
             request.user,
             customer,
@@ -281,7 +315,7 @@ class CustomerNotesView(SellerAPIView):
             request=request,
         )
         return Response(
-            message_to_dict(msg, request),
+            _with_quota(message_to_dict(msg, request), request.user),
             status=status.HTTP_201_CREATED,
         )
 
@@ -302,6 +336,9 @@ class CustomerMessagesView(SellerAPIView):
                 {'message': 'message is required'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        quota_err = _require_message_quota(request.user, count=1)
+        if quota_err:
+            return _quota_error_response(quota_err)
         msg = send_seller_message(
             request.user,
             customer,
@@ -309,7 +346,7 @@ class CustomerMessagesView(SellerAPIView):
             request=request,
         )
         return Response(
-            message_to_dict(msg, request),
+            _with_quota(message_to_dict(msg, request), request.user),
             status=status.HTTP_201_CREATED,
         )
 
@@ -341,6 +378,9 @@ class CustomerFilesView(SellerAPIView):
                 {'message': 'file is required'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        quota_err = _require_message_quota(request.user, count=1)
+        if quota_err:
+            return _quota_error_response(quota_err)
         label = request.data.get('label') or request.data.get('message', '')
         msg = send_seller_message(
             request.user,
@@ -351,13 +391,16 @@ class CustomerFilesView(SellerAPIView):
         )
         data = message_to_dict(msg, request)
         return Response(
-            {
-                'id': data['id'],
-                'label': label or 'Image',
-                'file_url': data['image_url'],
-                'message': data,
-                'created_at': data['created_at'],
-            },
+            _with_quota(
+                {
+                    'id': data['id'],
+                    'label': label or 'Image',
+                    'file_url': data['image_url'],
+                    'message': data,
+                    'created_at': data['created_at'],
+                },
+                request.user,
+            ),
             status=status.HTTP_201_CREATED,
         )
 
@@ -451,6 +494,9 @@ class RemindCustomerView(SellerAPIView):
             request.user,
             serializer.validated_data.get('channels'),
         )
+        quota_err = _require_message_quota(request.user, count=len(channels))
+        if quota_err:
+            return _quota_error_response(quota_err)
         results = send_customer_reminder(
             request.user,
             customer,
@@ -459,10 +505,13 @@ class RemindCustomerView(SellerAPIView):
         )
         any_sent = any(r.get('sent') for r in results.values())
         return Response(
-            {
-                'message': 'Reminder sent' if any_sent else 'Reminder queued with errors',
-                **results,
-            },
+            _with_quota(
+                {
+                    'message': 'Reminder sent' if any_sent else 'Reminder queued with errors',
+                    **results,
+                },
+                request.user,
+            ),
             status=status.HTTP_200_OK,
         )
 
@@ -573,6 +622,12 @@ class SellerPaymentMethodsView(SellerAPIView):
                     {
                         'id': 'cash',
                         'label': 'Cash',
+                        'seller_manual': True,
+                        'online': False,
+                    },
+                    {
+                        'id': 'my_qr',
+                        'label': 'My QR',
                         'seller_manual': True,
                         'online': False,
                     },

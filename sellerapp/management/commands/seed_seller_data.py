@@ -41,6 +41,7 @@ class Command(BaseCommand):
                 'role': Seller.ROLE_SELLER,
                 'address': 'Main Bazaar, Delhi',
                 'gst_number': '07ABCDE1234F1Z5',
+                'upi_id': 'ramesh.kirana@okaxis',
             },
         )
         seller.set_password(DEMO_PASSWORD)

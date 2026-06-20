@@ -57,7 +57,10 @@ class CustomerAccountsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        qs = CustomerAccount.objects.filter(user=request.user)
+        sync_customer_from_seller_ledgers(request.user)
+        qs = CustomerAccount.objects.filter(user=request.user).select_related(
+            'seller', 'seller_customer__seller'
+        )
         since = request.query_params.get('since')
         if since:
             try:
@@ -335,17 +338,48 @@ class HelpView(APIView):
                 'faq': [
                     {
                         'question': 'How do I pay my shop dues?',
-                        'answer': 'Go to Pay, select shops, choose a payment method, and confirm.',
+                        'answer': (
+                            'Tap the orange + button on the home screen, select the shops '
+                            'you want to pay, choose UPI or another method, and confirm.'
+                        ),
                     },
                     {
                         'question': 'How do I download a statement?',
-                        'answer': 'Open an account and tap Statement to view transaction history.',
+                        'answer': (
+                            'Open Accounts, pick a shop, then tap Statement. You can share '
+                            'or download the PDF from there.'
+                        ),
+                    },
+                    {
+                        'question': 'What is wallet balance / advance?',
+                        'answer': (
+                            'If you pay more than your due amount, the extra is kept as advance '
+                            'in your wallet and used automatically on your next purchase.'
+                        ),
+                    },
+                    {
+                        'question': 'How do I chat with my shop?',
+                        'answer': (
+                            'Go to Accounts or Home, open a shop, and tap Chat. You can send '
+                            'text messages and photos.'
+                        ),
+                    },
+                    {
+                        'question': 'How do privacy settings work?',
+                        'answer': (
+                            'In Profile → Privacy & security you can choose whether linked shops '
+                            'can see your phone number and email on your profile.'
+                        ),
                     },
                     {
                         'question': 'Who do I contact for support?',
-                        'answer': 'Email support@easyudhar.com or chat with your shop from Accounts.',
+                        'answer': (
+                            'Email support@easyudhar.com or use Help & support in Profile. '
+                            'You can also chat with your shop directly from Accounts.'
+                        ),
                     },
                 ],
+                'support_email': 'support@easyudhar.com',
             }
         )
 

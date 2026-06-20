@@ -37,8 +37,19 @@ def dashboard_summary(user):
     }
 
 
+def _account_seller_upi(account):
+    seller = account.seller
+    if seller is None and account.seller_customer_id:
+        seller = getattr(account.seller_customer, 'seller', None)
+    if seller is None:
+        return ''
+    return (seller.upi_id or '').strip()
+
+
 def payment_summary(user):
-    accounts = CustomerAccount.objects.filter(user=user, has_balance=True)
+    accounts = CustomerAccount.objects.filter(user=user, has_balance=True).select_related(
+        'seller', 'seller_customer__seller'
+    )
     total_due = accounts.aggregate(total=Sum('outstanding_amount'))['total'] or Decimal('0')
     splits = [
         {
@@ -46,6 +57,7 @@ def payment_summary(user):
             'shop_name': a.shop_name,
             'amount': str(a.outstanding_amount),
             'outstanding_amount': str(a.outstanding_amount),
+            'seller_upi_id': _account_seller_upi(a),
         }
         for a in accounts
     ]

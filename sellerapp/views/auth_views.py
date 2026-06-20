@@ -41,6 +41,9 @@ class SellerLoginView(APIView):
         serializer = SellerLoginSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data['user']
+        from ..subscription_service import start_seller_trial
+
+        start_seller_trial(user)
         return Response(
             {
                 'message': 'Login successful',
@@ -97,6 +100,9 @@ class SellerOTPVerifyView(APIView):
         serializer = SellerOTPVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        from ..subscription_service import start_seller_trial
+
+        start_seller_trial(user)
         return Response(
             {
                 'message': 'OTP verified',

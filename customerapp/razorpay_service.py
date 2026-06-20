@@ -113,11 +113,25 @@ def create_razorpay_order(*, user, shop_id=None, shop_ids=None, amount):
         user, shop_id, shop_ids, amount
     )
     reference_id = f'PAY-{uuid.uuid4().hex[:12].upper()}'
-    rz_order = _razorpay_request(
-        'POST',
-        '/orders',
+
+    from easyudhar.razorpay_route import (
+        attach_transfers_to_order_payload,
+        build_transfers_for_sellers,
+        plan_seller_amounts,
+    )
+
+    by_seller = plan_seller_amounts(targets, pay_amount, account=account)
+    transfers, transfer_total = build_transfers_for_sellers(by_seller)
+    order_amount_paise = _amount_paise(pay_amount)
+    if transfer_total != order_amount_paise:
+        raise RazorpayError(
+            'Payout split does not match payment amount.',
+            code='transfer_mismatch',
+        )
+
+    order_payload = attach_transfers_to_order_payload(
         {
-            'amount': _amount_paise(pay_amount),
+            'amount': order_amount_paise,
             'currency': 'INR',
             'receipt': reference_id,
             'notes': {
@@ -125,7 +139,9 @@ def create_razorpay_order(*, user, shop_id=None, shop_ids=None, amount):
                 'shop_ids': ','.join(ids),
             },
         },
+        transfers,
     )
+    rz_order = _razorpay_request('POST', '/orders', order_payload)
 
     RazorpayPaymentOrder.objects.create(
         user=user,
