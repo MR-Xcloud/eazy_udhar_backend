@@ -1,0 +1,24 @@
+# Cron for EazyUdhar background jobs (user deveazy, no sudo)
+#
+# Install (as deveazy):
+#   mkdir -p /home/deveazy/easyudhar/logs
+#   crontab -e
+#   Paste the three job lines below (without the leading # comments on schedule lines).
+#
+# Or with root:
+#   sudo cp deploy/cron-eazyudhar /etc/cron.d/eazyudhar && sudo chmod 644 /etc/cron.d/eazyudhar
+#
+# Django loads /home/deveazy/easyudhar/.env automatically — do NOT source .env in cron.
+# Reminders + daily summary run hourly; each seller's SellerSettings time picks who gets mail.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Every hour at :00 — automatic payment reminders (seller auto_remind_time, default 09:00 IST)
+0 * * * * cd /home/deveazy/easyudhar && /home/deveazy/venv/bin/python manage.py run_auto_reminders >> /home/deveazy/easyudhar/logs/cron.log 2>&1
+
+# Every hour at :00 — daily business summary SMS/push (seller daily_summary_time, default 21:00 IST)
+0 * * * * cd /home/deveazy/easyudhar && /home/deveazy/venv/bin/python manage.py send_daily_summary >> /home/deveazy/easyudhar/logs/cron.log 2>&1
+
+# 15:30 UTC = 21:00 IST — nightly customer digest SMS (statement links)
+30 15 * * * cd /home/deveazy/easyudhar && /home/deveazy/venv/bin/python manage.py send_nightly_sms >> /home/deveazy/easyudhar/logs/cron.log 2>&1

@@ -1,0 +1,17 @@
+[Unit]
+Description=EazyUdhar Django API (Gunicorn)
+After=network.target mariadb.service mysql.service
+Wants=mariadb.service
+
+[Service]
+Type=simple
+User=deveazy
+Group=deveazy
+WorkingDirectory=/home/deveazy/easyudhar
+EnvironmentFile=/home/deveazy/.env
+ExecStart=/home/deveazy/venv/bin/gunicorn -c /home/deveazy/easyudhar/deploy/gunicorn.conf.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

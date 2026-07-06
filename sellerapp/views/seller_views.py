@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -58,6 +58,13 @@ from ..sync_service import (
 from ..utils import get_seller_customer, seller_to_dict
 
 
+_LATEST_TX_PREFETCH = Prefetch(
+    'transactions',
+    queryset=LedgerTransaction.objects.order_by('-created_at')[:1],
+    to_attr='latest_transactions',
+)
+
+
 class SellerAPIView(APIView):
     authentication_classes = [SellerJWTAuthentication]
     permission_classes = [IsSeller]
@@ -81,11 +88,22 @@ def _with_quota(payload, seller):
     return payload
 
 
-def _require_message_quota(seller, count=1):
+def _require_message_quota(seller, count=1, channels=None):
     from ..subscription_service import SubscriptionQuotaError, assert_can_send_messages
 
+    if channels:
+        sms_count = sum(1 for c in channels if c == 'sms')
+        other_count = sum(1 for c in channels if c == 'whatsapp')
+    else:
+        sms_count = 0
+        other_count = count
+
     try:
-        assert_can_send_messages(seller, count=count)
+        assert_can_send_messages(
+            seller,
+            sms_count=sms_count,
+            other_count=other_count,
+        )
     except SubscriptionQuotaError as exc:
         return exc
     return None
@@ -101,19 +119,15 @@ class SellerMeView(SellerAPIView):
 
 class SellerDashboardView(SellerAPIView):
     def get(self, request):
-        try:
-            from ..seller_razorpay_service import sync_seller_payment_links
-
-            sync_seller_payment_links(request.user)
-        except Exception:
-            pass
         return Response(dashboard_data(request.user))
 
 
 class SellerCustomersView(SellerAPIView):
     def get(self, request):
         refresh_overdue_for_seller(request.user)
-        qs = SellerCustomer.objects.filter(seller=request.user)
+        qs = SellerCustomer.objects.filter(seller=request.user).prefetch_related(
+            _LATEST_TX_PREFETCH
+        )
         status_filter = request.query_params.get('status')
         search = request.query_params.get('search')
         since = request.query_params.get('since')
@@ -378,9 +392,6 @@ class CustomerFilesView(SellerAPIView):
                 {'message': 'file is required'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        quota_err = _require_message_quota(request.user, count=1)
-        if quota_err:
-            return _quota_error_response(quota_err)
         label = request.data.get('label') or request.data.get('message', '')
         msg = send_seller_message(
             request.user,
@@ -388,19 +399,16 @@ class CustomerFilesView(SellerAPIView):
             text=label,
             attachment=upload,
             request=request,
+            notify=False,
         )
         data = message_to_dict(msg, request)
         return Response(
-            _with_quota(
-                {
-                    'id': data['id'],
-                    'label': label or 'Image',
-                    'file_url': data['image_url'],
-                    'message': data,
-                    'created_at': data['created_at'],
-                },
-                request.user,
-            ),
+            {
+                'id': data['id'],
+                'label': label or 'Image',
+                'file_url': data['image_url'],
+                'message': data,
+            },
             status=status.HTTP_201_CREATED,
         )
 
@@ -458,6 +466,22 @@ class AddCreditView(SellerAPIView):
         customer.refresh_from_db()
         payload = write_result(customer, tx, duplicate=duplicate, sms=sms_result)
         payload['message'] = 'Credit added' if not duplicate else 'Credit already recorded'
+
+        upload = request.FILES.get('file')
+        if upload and not duplicate:
+            from customerapp.messaging import message_to_dict, send_seller_message
+
+            caption = (data.get('note') or '').strip()
+            chat_msg = send_seller_message(
+                request.user,
+                customer,
+                text=caption,
+                attachment=upload,
+                request=request,
+                notify=False,
+            )
+            payload['chat_message'] = message_to_dict(chat_msg, request)
+
         return Response(payload, status=status.HTTP_200_OK if duplicate else status.HTTP_201_CREATED)
 
 
@@ -494,9 +518,11 @@ class RemindCustomerView(SellerAPIView):
             request.user,
             serializer.validated_data.get('channels'),
         )
-        quota_err = _require_message_quota(request.user, count=len(channels))
-        if quota_err:
-            return _quota_error_response(quota_err)
+        billable = [c for c in channels if c in ('sms', 'whatsapp')]
+        if billable:
+            quota_err = _require_message_quota(request.user, channels=billable)
+            if quota_err:
+                return _quota_error_response(quota_err)
         results = send_customer_reminder(
             request.user,
             customer,

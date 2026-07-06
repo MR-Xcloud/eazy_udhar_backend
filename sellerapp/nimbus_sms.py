@@ -71,26 +71,26 @@ def _apply_template(template, values, *, raw_var_indices=None):
     return text
 
 
-def _build_credit_text(amount, shop_name):
-    """CREDIT3: amount, added-by shop, platform name."""
+def _build_credit_text(amount, shop_name, *, link_var=None):
+    """CREDIT3: amount, shop, statement short link (DLT var3 ≤30 chars)."""
     return _apply_template(
         settings.NIMBUS_CREDIT_SMS_TEXT,
         [
             _format_amount(amount),
             shop_name,
-            settings.NIMBUS_SMS_PLATFORM_NAME,
+            link_var or settings.NIMBUS_SMS_PLATFORM_NAME,
         ],
     )
 
 
-def _build_payment_text(amount, shop_name):
-    """PAYMENT3: amount, credited-by shop, platform name."""
+def _build_payment_text(amount, shop_name, *, link_var=None):
+    """PAYMENT3: amount, shop, statement short link (DLT var3 ≤30 chars)."""
     return _apply_template(
         settings.NIMBUS_PAYMENT_SMS_TEXT,
         [
             _format_amount(amount),
             shop_name,
-            settings.NIMBUS_SMS_PLATFORM_NAME,
+            link_var or settings.NIMBUS_SMS_PLATFORM_NAME,
         ],
     )
 
@@ -235,12 +235,14 @@ def send_push_sms(*, mobile, text, template_id):
         'reqid': reqid,
         'error': '' if sent else body or 'SMS send failed',
         'raw_response': body,
+        'text': text,
+        'template_id': template_id,
     }
     if sent:
         logger.info('Nimbus SMS submitted to %s template=%s reqid=%s', phone, template_id, reqid)
         _sms_print(f'QUEUED — accepted by Nimbus API for {api_mobile} (reqid={reqid or "?"})')
         _sms_print(f'Nimbus response: {body}')
-        if reqid:
+        if reqid and getattr(settings, 'NIMBUS_WAIT_DELIVERY_REPORT', False):
             time.sleep(3)
             report = pull_delivery_report(reqid=reqid, mobile=phone)
             result['delivery_report'] = report
@@ -269,6 +271,26 @@ def _response_indicates_success(body):
     return body.replace('-', '').replace('{', '').isdigit()
 
 
+def build_reminder_sms_text(*, seller, customer):
+    """Rendered DLT reminder SMS body (same text Nimbus receives)."""
+    from .daily_sms import ensure_statement_digest, statement_sms_link_for_digest
+
+    digest = ensure_statement_digest(customer)
+    link_var = statement_sms_link_for_digest(digest)
+    return _apply_template(
+        getattr(
+            settings,
+            'NIMBUS_REMINDER_SMS_TEXT',
+            'Payment Reminder: Balance of Rs. {#var#} is pending with {#var#} . View details on: {#var#} - EAZYUDHAR by INWIZY',
+        ),
+        [
+            _format_amount(customer.outstanding_amount),
+            seller.business_name,
+            link_var,
+        ],
+    )
+
+
 def send_reminder_sms(*, seller, customer, message):
     _sms_print(
         f'REMINDER SMS — customer={customer.name!r} phone={customer.phone!r} '
@@ -284,26 +306,16 @@ def send_reminder_sms(*, seller, customer, message):
             'error': err,
             'raw_response': '',
         }
-    # DLT {#var#} slots are max ~30 chars on Jio; full statement URLs fail (1561).
-    # Third var uses platform name (same pattern as CREDIT3/PAYMENT3). Statement link
-    # is still sent via in-app notification / push on remind.
-    text = _apply_template(
-        getattr(
-            settings,
-            'NIMBUS_REMINDER_SMS_TEXT',
-            'Payment Reminder: Balance of Rs. {#var#} is pending with {#var#} . View details on: {#var#} - EAZYUDHAR by INWIZY',
-        ),
-        [
-            _format_amount(customer.outstanding_amount),
-            seller.business_name,
-            settings.NIMBUS_SMS_PLATFORM_NAME,
-        ],
-    )
-    return send_push_sms(
+    # DLT {#var#} slots are max ~30 chars — use short link api.eazyudhar.com/s/xxxxxxxx
+    text = build_reminder_sms_text(seller=seller, customer=customer)
+    result = send_push_sms(
         mobile=customer.phone,
         text=text,
         template_id=template_id,
     )
+    result['text'] = text
+    result['template_id'] = template_id
+    return result
 
 
 def send_summary_sms(*, seller, text):
@@ -323,12 +335,12 @@ def send_summary_sms(*, seller, text):
     )
 
 
-def send_credit_sms(*, seller, customer, amount, balance=None):
+def send_credit_sms(*, seller, customer, amount, balance=None, link_var=None):
     _sms_print(
         f'CREDIT SMS — customer={customer.name!r} phone={customer.phone!r} '
         f'amount={amount} shop={seller.business_name!r}'
     )
-    text = _build_credit_text(amount, seller.business_name)
+    text = _build_credit_text(amount, seller.business_name, link_var=link_var)
     return send_push_sms(
         mobile=customer.phone,
         text=text,
@@ -336,12 +348,12 @@ def send_credit_sms(*, seller, customer, amount, balance=None):
     )
 
 
-def send_payment_sms(*, seller, customer, amount, balance=None, payment_method=''):
+def send_payment_sms(*, seller, customer, amount, balance=None, payment_method='', link_var=None):
     _sms_print(
         f'PAYMENT SMS — customer={customer.name!r} phone={customer.phone!r} '
         f'amount={amount} shop={seller.business_name!r} method={payment_method!r}'
     )
-    text = _build_payment_text(amount, seller.business_name)
+    text = _build_payment_text(amount, seller.business_name, link_var=link_var)
     return send_push_sms(
         mobile=customer.phone,
         text=text,
@@ -349,14 +361,14 @@ def send_payment_sms(*, seller, customer, amount, balance=None, payment_method='
     )
 
 
-def _build_daily_credit_text(amount, shop_name):
-    """Nightly digest — var3 is platform name (DLT 30-char limit; no URL in SMS)."""
-    return _build_credit_text(amount, shop_name)
+def _build_daily_credit_text(amount, shop_name, *, link_var=None):
+    """Nightly digest — var3 is short statement link (DLT 30-char limit)."""
+    return _build_credit_text(amount, shop_name, link_var=link_var)
 
 
-def _build_daily_payment_text(amount, shop_name):
-    """Nightly digest — var3 is platform name (DLT 30-char limit; no URL in SMS)."""
-    return _build_payment_text(amount, shop_name)
+def _build_daily_payment_text(amount, shop_name, *, link_var=None):
+    """Nightly digest — var3 is short statement link (DLT 30-char limit)."""
+    return _build_payment_text(amount, shop_name, link_var=link_var)
 
 
 def _build_otp_text(otp):
@@ -380,21 +392,22 @@ def send_daily_digest_sms(*, seller, customer, digest):
     """
     Legacy single-shop digest sender. Nightly cron uses send_merged_nightly_digest_sms instead.
     """
-    from .daily_sms import statement_link
+    from .daily_sms import statement_link, statement_sms_link_for_digest
 
     link = statement_link(digest.token)
+    link_var = statement_sms_link_for_digest(digest)
     shop_name = seller.business_name
     has_credit = digest.credit_total > 0
     has_payment = digest.payment_total > 0
 
     if has_credit:
         amount = digest.credit_total
-        text = _build_daily_credit_text(amount, shop_name)
+        text = _build_daily_credit_text(amount, shop_name, link_var=link_var)
         template_id = settings.NIMBUS_CREDIT_TEMPLATE_ID
         kind = 'CREDIT DIGEST'
     elif has_payment:
         amount = digest.payment_total
-        text = _build_daily_payment_text(amount, shop_name)
+        text = _build_daily_payment_text(amount, shop_name, link_var=link_var)
         template_id = settings.NIMBUS_PAYMENT_TEMPLATE_ID
         kind = 'PAYMENT DIGEST'
     else:
@@ -416,25 +429,39 @@ def send_daily_digest_sms(*, seller, customer, digest):
     )
 
 
+def build_merged_digest_sms_text(*, digests, nightly, credit_total, payment_total):
+    """Rendered nightly digest SMS body."""
+    from .daily_sms import merged_shop_label, statement_sms_link_for_digest
+
+    link_var = statement_sms_link_for_digest(nightly)
+    shop_name = merged_shop_label(digests)
+    if credit_total > 0:
+        return _build_daily_credit_text(credit_total, shop_name, link_var=link_var)
+    if payment_total > 0:
+        return _build_daily_payment_text(payment_total, shop_name, link_var=link_var)
+    return ''
+
+
 def send_merged_nightly_digest_sms(*, phone, digests, nightly, credit_total, payment_total):
     """
     One SMS per customer phone summarizing all shop activity for the day.
     Uses CREDIT template when any credit today, else PAYMENT template.
     """
-    from .daily_sms import merged_shop_label, statement_link
+    from .daily_sms import merged_shop_label, statement_link, statement_sms_link_for_digest
 
     link = statement_link(nightly.token)
+    link_var = statement_sms_link_for_digest(nightly)
     shop_name = merged_shop_label(digests)
     customer_name = digests[0].seller_customer.name if digests else ''
 
     if credit_total > 0:
         amount = credit_total
-        text = _build_daily_credit_text(amount, shop_name)
+        text = _build_daily_credit_text(amount, shop_name, link_var=link_var)
         template_id = settings.NIMBUS_CREDIT_TEMPLATE_ID
         kind = 'MERGED CREDIT DIGEST'
     elif payment_total > 0:
         amount = payment_total
-        text = _build_daily_payment_text(amount, shop_name)
+        text = _build_daily_payment_text(amount, shop_name, link_var=link_var)
         template_id = settings.NIMBUS_PAYMENT_TEMPLATE_ID
         kind = 'MERGED PAYMENT DIGEST'
     else:
@@ -443,14 +470,19 @@ def send_merged_nightly_digest_sms(*, phone, digests, nightly, credit_total, pay
             'message_id': '',
             'error': 'No credit or payment activity for merged digest',
             'raw_response': '',
+            'text': '',
+            'template_id': '',
         }
 
     _sms_print(
         f'{kind} SMS — customer={customer_name!r} phone={phone!r} '
         f'amount={amount} shops={len(digests)} date={nightly.activity_date} link={link!r}'
     )
-    return send_push_sms(
+    result = send_push_sms(
         mobile=phone,
         text=text,
         template_id=template_id,
     )
+    result['text'] = text
+    result['template_id'] = template_id
+    return result

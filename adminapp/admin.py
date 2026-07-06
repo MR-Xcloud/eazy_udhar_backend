@@ -13,6 +13,7 @@ from .models import (
     SellerSubscription,
     SubscriptionInvoice,
     SubscriptionPlan,
+    SmsPack,
     SupportTicket,
     SyncQueueItem,
     TicketReply,
@@ -41,6 +42,22 @@ class SubscriptionPlanAdmin(admin.ModelAdmin):
         'price_monthly',
         'price_yearly',
         'trial_days',
+        'is_active',
+        'sort_order',
+    )
+    list_filter = ('is_active',)
+    search_fields = ('name', 'slug')
+    prepopulated_fields = {'slug': ('name',)}
+
+
+@admin.register(SmsPack)
+class SmsPackAdmin(admin.ModelAdmin):
+    list_display = (
+        'name',
+        'slug',
+        'sms_quantity',
+        'unit_price_paise',
+        'gst_percent',
         'is_active',
         'sort_order',
     )

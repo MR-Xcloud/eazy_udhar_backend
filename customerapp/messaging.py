@@ -1,3 +1,5 @@
+from django.db.models import Q
+
 from customerapp.models import Customer, CustomerAccount, CustomerNotification, ShopMessage
 from sellerapp.models import SellerCustomer
 
@@ -22,7 +24,10 @@ def find_customer_user_by_phone(phone):
     norm = normalize_phone(phone)
     if not norm:
         return None
-    for user in Customer.objects.all().only('id', 'phone', 'email'):
+    candidates = Customer.objects.filter(
+        Q(phone=norm) | Q(phone__endswith=norm) | Q(phone__icontains=norm)
+    ).only('id', 'phone', 'email')[:25]
+    for user in candidates:
         if phones_match(user.phone, phone):
             return user
     return None
@@ -54,10 +59,24 @@ def link_seller_customer(seller_customer):
     return user
 
 
+def _seller_customers_matching_user(customer_user):
+    """Narrow seller rows by phone/email instead of scanning the full table."""
+    norm = normalize_phone(customer_user.phone)
+    filters = Q()
+    if norm:
+        filters |= Q(phone__icontains=norm)
+    email = (customer_user.email or '').strip()
+    if email:
+        filters |= Q(email__iexact=email)
+    if not filters:
+        return SellerCustomer.objects.none()
+    return SellerCustomer.objects.select_related('seller').filter(filters)
+
+
 def sync_customer_from_seller_ledgers(customer_user):
-    """Link all seller ledger rows that match this customer's phone/email."""
+    """Link seller ledger rows that match this customer's phone/email."""
     linked_accounts = []
-    for sc in SellerCustomer.objects.select_related('seller').all():
+    for sc in _seller_customers_matching_user(customer_user):
         phone_match = phones_match(sc.phone, customer_user.phone)
         email_match = (
             sc.email
@@ -265,6 +284,11 @@ def send_seller_message(
     request=None,
     notify=True,
 ):
+    from easyudhar.image_upload import compress_uploaded_image
+
+    if attachment:
+        attachment = compress_uploaded_image(attachment)
+
     customer_user = link_seller_customer(seller_customer)
     account = None
     if customer_user:
@@ -280,7 +304,9 @@ def send_seller_message(
         attachment=attachment,
     )
 
-    if notify and customer_user and account:
+    # Images are in-app only — no push/SMS notification to customer.
+    should_notify = notify if notify is not None else not attachment
+    if should_notify and customer_user and account:
         notify_customer_message(
             customer_user,
             account,
@@ -291,6 +317,11 @@ def send_seller_message(
 
 
 def send_customer_message(customer_user, account, *, text='', attachment=None, request=None):
+    from easyudhar.image_upload import compress_uploaded_image
+
+    if attachment:
+        attachment = compress_uploaded_image(attachment)
+
     from sellerapp.notifications import notify_seller_message
 
     seller_customer = account.seller_customer
@@ -306,5 +337,7 @@ def send_customer_message(customer_user, account, *, text='', attachment=None, r
         message=text or '',
         attachment=attachment,
     )
-    notify_seller_message(seller_customer.seller, seller_customer, message)
+    # Images are in-app only — no push/SMS notification to seller.
+    if not attachment:
+        notify_seller_message(seller_customer.seller, seller_customer, message)
     return message

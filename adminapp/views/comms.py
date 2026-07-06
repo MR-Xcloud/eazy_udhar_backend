@@ -7,7 +7,7 @@ from sellerapp.models import ReminderLog, SellerSettings
 from sellerapp.reminders import send_customer_reminder
 
 from ..services.data import reminder_log_item
-from ..utils import log_audit, mask_phone
+from ..utils import log_audit
 from .base import AdminAPIView
 
 
@@ -45,9 +45,11 @@ def _otp_status(record):
 
 
 def _otp_item(record):
+    contact = record.phone or record.email or ''
     return {
         'id': str(record.id),
-        'phone': mask_phone(record.phone or record.email),
+        'phone': contact,
+        'recipient': contact,
         'purpose': record.purpose,
         'status': _otp_status(record),
         'attempts': 1,

@@ -3,6 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth.password_validation import validate_password
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -71,6 +72,7 @@ class SellerRegisterSerializer(serializers.ModelSerializer):
             attrs['business_name'] = attrs.get('full_name') or 'My Shop'
         return attrs
 
+    @transaction.atomic
     def create(self, validated_data):
         password = validated_data.pop('password')
         email = validated_data['email']
@@ -80,7 +82,7 @@ class SellerRegisterSerializer(serializers.ModelSerializer):
             **validated_data,
         )
         SellerSettings.objects.get_or_create(seller=user)
-        from ..subscription_service import start_seller_trial
+        from .subscription_service import start_seller_trial
 
         start_seller_trial(user)
         return user

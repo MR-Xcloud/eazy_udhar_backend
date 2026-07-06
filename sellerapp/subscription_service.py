@@ -110,44 +110,92 @@ def count_messages_used(seller, period_start, period_end):
         sender=ShopMessage.SENDER_SELLER,
         created_at__gte=period_start,
         created_at__lte=period_end,
-    ).count()
+    ).filter(attachment='').count()
 
     return reminder_count + chat_count
 
 
 def message_quota_dict(seller):
+    from .sms_pack_service import get_sms_pack_balance
+
     sub = get_current_subscription(seller)
     if sub is None:
         return {
             'message_limit': 0,
             'messages_used': 0,
             'messages_remaining': 0,
+            'sms_pack_balance': 0,
+            'total_messages_remaining': 0,
         }
 
     limit = int(_plan_features(sub.plan).get('message_limit', 0))
     start, end = _subscription_period_bounds(sub)
     used = count_messages_used(seller, start, end)
-    remaining = max(0, limit - used) if limit > 0 else 0
+    plan_remaining = max(0, limit - used) if limit > 0 else 0
+    pack_balance = get_sms_pack_balance(seller)
     return {
         'message_limit': limit,
         'messages_used': used,
-        'messages_remaining': remaining,
+        'messages_remaining': plan_remaining,
+        'sms_pack_balance': pack_balance,
+        'total_messages_remaining': plan_remaining + pack_balance,
     }
 
 
-def assert_can_send_messages(seller, *, count=1):
+def _sms_credits_from_pack(seller, sms_count):
+    """How many of [sms_count] sends must draw from prepaid SMS pack balance."""
+    sms_count = int(sms_count)
+    if sms_count <= 0:
+        return 0
+    quota = message_quota_dict(seller)
+    plan_remaining = quota['messages_remaining']
+    return max(0, sms_count - plan_remaining)
+
+
+def consume_message_credits_after_send(seller, *, sms=0, other=0):
+    """After a successful send, deduct prepaid SMS credits if plan quota is exhausted."""
+    pack_needed = _sms_credits_from_pack(seller, sms)
+    if pack_needed > 0:
+        from .sms_pack_service import consume_sms_pack_credit
+
+        consume_sms_pack_credit(seller, pack_needed)
+    # `other` (WhatsApp/chat) only consumes plan quota via usage counters.
+
+
+def assert_can_send_messages(seller, *, count=1, sms_count=None, other_count=None):
+    if sms_count is None and other_count is None:
+        other_count = count
+        sms_count = 0
+    else:
+        sms_count = int(sms_count or 0)
+        other_count = int(other_count or 0)
+
     quota = message_quota_dict(seller)
     limit = quota['message_limit']
-    if limit <= 0:
+    plan_remaining = quota['messages_remaining']
+    pack_balance = quota['sms_pack_balance']
+
+    if limit <= 0 and sms_count + other_count > 0:
         raise SubscriptionQuotaError(
             'Your plan does not include outbound messages. Upgrade to send SMS, '
             'WhatsApp, or chat messages.',
             quota=quota,
         )
-    if quota['messages_remaining'] < count:
+
+    sms_from_plan = min(sms_count, plan_remaining)
+    plan_after_sms = plan_remaining - sms_from_plan
+    sms_from_pack = sms_count - sms_from_plan
+
+    if sms_from_pack > pack_balance:
         raise SubscriptionQuotaError(
             f"Message limit reached ({quota['messages_used']} of {limit} used). "
-            'Upgrade your plan for more messages.',
+            'Buy an SMS pack or upgrade your plan for more messages.',
+            quota=quota,
+        )
+    if other_count > plan_after_sms:
+        raise SubscriptionQuotaError(
+            f"Message limit reached ({quota['messages_used']} of {limit} used). "
+            'Buy an SMS pack or upgrade your plan for more messages.',
             quota=quota,
         )
     return quota
@@ -228,6 +276,8 @@ def subscription_status_payload(seller):
             'message_limit': 0,
             'messages_used': 0,
             'messages_remaining': 0,
+            'sms_pack_balance': 0,
+            'total_messages_remaining': 0,
             'reminder_type': 'on_demand',
             'billing_cycle': None,
         }
@@ -251,7 +301,6 @@ def subscription_status_payload(seller):
             billing_cycle = latest_paid.billing_cycle
 
     quota = message_quota_dict(seller)
-
     return {
         'status': sub.status,
         'plan_name': sub.plan.name,
@@ -264,6 +313,8 @@ def subscription_status_payload(seller):
         'message_limit': quota['message_limit'],
         'messages_used': quota['messages_used'],
         'messages_remaining': quota['messages_remaining'],
+        'sms_pack_balance': quota['sms_pack_balance'],
+        'total_messages_remaining': quota['total_messages_remaining'],
         'reminder_type': features.get('reminder_type', 'on_demand'),
         'billing_cycle': billing_cycle,
     }

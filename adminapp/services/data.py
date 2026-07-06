@@ -61,6 +61,29 @@ def seller_list_item(seller):
         'subscription_status': seller_subscription_status(seller),
         'created_at': seller.created_at.isoformat(),
         'last_login_at': seller.last_login.isoformat() if seller.last_login else None,
+        **_seller_payout_fields(seller),
+    }
+
+
+def _seller_payout_fields(seller):
+    acct = (seller.bank_account_number or '').strip()
+    if len(acct) >= 4:
+        masked = f'****{acct[-4:]}'
+    elif acct:
+        masked = '****'
+    else:
+        masked = ''
+    holder = (seller.bank_account_holder or '').strip()
+    ifsc = (seller.bank_ifsc or '').strip()
+    return {
+        'upi_id': seller.upi_id or '',
+        'bank_account_holder': holder,
+        'bank_account_number': acct,
+        'bank_account_number_masked': masked,
+        'bank_ifsc': ifsc,
+        'razorpay_linked_account_id': seller.razorpay_linked_account_id or '',
+        'razorpay_route_status': seller.razorpay_route_status or '',
+        'payout_configured': bool(holder and acct and ifsc),
     }
 
 
@@ -80,6 +103,7 @@ def seller_detail(seller):
             'overdue_amount': float(
                 overdue_qs.aggregate(t=Sum('outstanding_amount'))['t'] or 0
             ),
+            **_seller_payout_fields(seller),
         }
     )
     return data
@@ -115,13 +139,57 @@ def seller_customer_item(sc):
         'seller_name': sc.seller.business_name,
         'name': sc.name,
         'phone': sc.phone,
+        'email': sc.email or '',
         'outstanding': float(sc.outstanding_amount),
         'status': status_map.get(sc.status, sc.status),
         'last_transaction_at': (
             last_tx.effective_at.isoformat() if last_tx else None
         ),
         'created_at': sc.created_at.isoformat(),
+        'updated_at': sc.updated_at.isoformat(),
     }
+
+
+def seller_customer_detail(sc):
+    data = seller_customer_item(sc)
+    data.update(
+        {
+            'address': sc.address or '',
+            'city': sc.city or '',
+            'state': sc.state or '',
+            'country': sc.country or '',
+            'next_due_date': sc.next_due_date.isoformat() if sc.next_due_date else None,
+            'advance_deposited': float(sc.advance_deposited),
+            'advance_used': float(sc.advance_used),
+            'advance_balance': float(sc.advance_balance),
+            'linked_customer_id': sc.linked_customer_id,
+            'client_id': str(sc.client_id) if sc.client_id else None,
+            'device_created_at': (
+                sc.device_created_at.isoformat() if sc.device_created_at else None
+            ),
+        }
+    )
+    return data
+
+
+def customer_account_detail(account):
+    data = customer_account_item(account)
+    data.update(
+        {
+            'customer_email': account.user.email,
+            'customer_phone': account.user.phone,
+            'advance_deposited': float(account.advance_deposited),
+            'advance_used': float(account.advance_used),
+            'next_due_date': (
+                account.next_due_date.isoformat() if account.next_due_date else None
+            ),
+            'seller_customer_id': (
+                str(account.seller_customer_id) if account.seller_customer_id else None
+            ),
+            'updated_at': account.updated_at.isoformat(),
+        }
+    )
+    return data
 
 
 def customer_list_item(customer):
@@ -396,20 +464,45 @@ def shop_message_item(msg):
     }
 
 
-def reminder_log_item(log):
-    from adminapp.utils import mask_phone
+def _reminder_message_body(log):
+    if log.message_body:
+        return log.message_body
+    if log.channel != ReminderLog.CHANNEL_SMS:
+        return ''
+    try:
+        from sellerapp.nimbus_sms import build_reminder_sms_text
 
+        return build_reminder_sms_text(seller=log.seller, customer=log.customer)
+    except Exception:
+        return (
+            f'Payment reminder for {log.customer.name}: outstanding '
+            f'Rs. {log.customer.outstanding_amount} at {log.seller.business_name}.'
+        )
+
+
+def reminder_log_item(log):
     status = 'sent' if log.success else 'failed'
+    recipient = log.recipient_phone or log.customer.phone
+    message_body = _reminder_message_body(log)
     return {
         'id': str(log.id),
         'seller_id': log.seller_id,
+        'seller_name': log.seller.business_name,
         'customer_id': str(log.customer_id),
+        'customer_name': log.customer.name,
         'channel': log.channel,
         'type': log.reminder_type,
-        'template_name': '',
-        'recipient': mask_phone(log.customer.phone),
+        'template_id': log.template_id or '',
+        'template_name': log.template_id or '',
+        'message_body': message_body,
+        'message': message_body,
+        'recipient': recipient,
+        'recipient_phone': recipient,
         'status': status,
+        'success': log.success,
         'error_message': log.error_message,
-        'provider_message_id': '',
+        'provider_message_id': log.provider_message_id or '',
+        'delivery_report': log.delivery_report or '',
         'created_at': log.sent_at.isoformat(),
+        'sent_at': log.sent_at.isoformat(),
     }

@@ -1,6 +1,7 @@
 import secrets
 from collections import defaultdict
 from decimal import Decimal
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db.models import Q, Sum
@@ -8,12 +9,79 @@ from django.utils import timezone
 
 from customerapp.messaging import normalize_phone
 
-from .models import CustomerDayDigest, CustomerNightlyDigest, LedgerTransaction
+from .models import CustomerDayDigest, CustomerNightlyDigest, LedgerTransaction, ReminderLog
+
+SMS_SHORT_CODE_LENGTH = 8
+
+
+def _looks_like_internal_host(host):
+    """True for localhost, private LAN, or raw IPv4 — not suitable in customer SMS."""
+    if not host:
+        return True
+    bare = host.split(':')[0].strip().lower()
+    if bare in ('localhost', '127.0.0.1', '0.0.0.0'):
+        return True
+    if bare.startswith('10.') or bare.startswith('192.168.') or bare.startswith('172.'):
+        return True
+    parts = bare.split('.')
+    if len(parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in parts):
+        return True
+    return False
 
 
 def statement_link(token):
     base = settings.PUBLIC_STATEMENT_BASE_URL.rstrip('/')
     return f'{base}/{token}'
+
+
+def statement_sms_host():
+    """
+    Host used in SMS link variable (no scheme), e.g. api.eazyudhar.com/shortcode.
+    Must be a public hostname — never an internal IP or Gunicorn port.
+    """
+    host = getattr(settings, 'PUBLIC_STATEMENT_SMS_HOST', '').strip().rstrip('/')
+    base_parsed = urlparse(settings.PUBLIC_STATEMENT_BASE_URL)
+    base_host = (base_parsed.netloc or '').rstrip('/')
+
+    if host and not _looks_like_internal_host(host):
+        return host
+    if base_host and not _looks_like_internal_host(base_host):
+        return base_host
+    if host:
+        return host
+    return (base_host or 'api.eazyudhar.com').rstrip('/')
+
+
+def statement_sms_link(short_code):
+    """DLT-safe link for SMS var3 (no https, fits ~30 chars)."""
+    link = f'{statement_sms_host()}/{short_code}'
+    max_len = getattr(settings, 'NIMBUS_SMS_VAR_MAX_LENGTH', 30)
+    if max_len > 0 and len(link) > max_len:
+        return link[:max_len]
+    return link
+
+
+def _allocate_short_code():
+    for _ in range(20):
+        code = secrets.token_urlsafe(6)[:SMS_SHORT_CODE_LENGTH]
+        if (
+            not CustomerNightlyDigest.objects.filter(short_code=code).exists()
+            and not CustomerDayDigest.objects.filter(short_code=code).exists()
+        ):
+            return code
+    raise RuntimeError('Could not allocate unique SMS short_code')
+
+
+def ensure_digest_short_code(digest):
+    if digest.short_code:
+        return digest.short_code
+    digest.short_code = _allocate_short_code()
+    digest.save(update_fields=['short_code', 'updated_at'])
+    return digest.short_code
+
+
+def statement_sms_link_for_digest(digest):
+    return statement_sms_link(ensure_digest_short_code(digest))
 
 
 def merged_shop_label(digests):
@@ -49,8 +117,12 @@ def ensure_statement_digest(customer, activity_date=None):
     digest, _ = CustomerDayDigest.objects.get_or_create(
         seller_customer=customer,
         activity_date=activity_date,
-        defaults={'token': secrets.token_urlsafe(16)},
+        defaults={
+            'token': secrets.token_urlsafe(16),
+            'short_code': _allocate_short_code(),
+        },
     )
+    ensure_digest_short_code(digest)
     return digest
 
 
@@ -61,8 +133,12 @@ def ensure_nightly_digest(phone, activity_date=None):
     nightly, _ = CustomerNightlyDigest.objects.get_or_create(
         phone=phone,
         activity_date=activity_date,
-        defaults={'token': secrets.token_urlsafe(16)},
+        defaults={
+            'token': secrets.token_urlsafe(16),
+            'short_code': _allocate_short_code(),
+        },
     )
+    ensure_digest_short_code(nightly)
     return nightly
 
 
@@ -75,8 +151,12 @@ def record_daily_activity(customer, transaction):
     digest, _created = CustomerDayDigest.objects.get_or_create(
         seller_customer=customer,
         activity_date=activity_date,
-        defaults={'token': secrets.token_urlsafe(16)},
+        defaults={
+            'token': secrets.token_urlsafe(16),
+            'short_code': _allocate_short_code(),
+        },
     )
+    ensure_digest_short_code(digest)
     amount = Decimal(str(transaction.amount))
     if transaction.transaction_type == LedgerTransaction.TYPE_CREDIT:
         digest.credit_total += amount
@@ -98,12 +178,18 @@ def queued_sms_result(digest):
     phone = normalize_phone(digest.seller_customer.phone)
     nightly = ensure_nightly_digest(phone) if phone else None
     link_token = nightly.token if nightly else digest.token
+    sms_link = (
+        statement_sms_link_for_digest(nightly)
+        if nightly
+        else statement_sms_link_for_digest(digest)
+    )
     return {
         'sent': False,
         'queued': True,
         'message': 'SMS queued for nightly digest',
         'digest_token': link_token,
         'statement_url': statement_link(link_token),
+        'statement_sms_link': sms_link,
         'message_id': '',
         'error': '',
         'raw_response': '',
@@ -166,6 +252,7 @@ def send_pending_digests(*, activity_date=None, force=False):
                     'sent': True,
                     'error': '',
                     'statement_url': statement_link(nightly.token),
+                    'statement_sms_link': statement_sms_link_for_digest(nightly),
                     'skipped': True,
                 }
             )
@@ -193,6 +280,30 @@ def send_pending_digests(*, activity_date=None, force=False):
             credit_total=credit_total,
             payment_total=payment_total,
         )
+        primary = digests[0].seller_customer
+        from sellerapp.reminders import log_sms_delivery
+
+        if sms_result.get('sent'):
+            from sellerapp.sms_pack_service import consume_sms_pack_credit
+            from sellerapp.subscription_service import _sms_credits_from_pack
+
+            pack_needed = _sms_credits_from_pack(primary.seller, 1)
+            if pack_needed > 0:
+                consume_sms_pack_credit(primary.seller, pack_needed)
+
+        log_sms_delivery(
+            primary.seller,
+            primary,
+            ReminderLog.CHANNEL_SMS,
+            ReminderLog.TYPE_AUTO,
+            bool(sms_result.get('sent')),
+            sms_result.get('error', ''),
+            message_body=sms_result.get('text', ''),
+            template_id=sms_result.get('template_id', ''),
+            provider_message_id=sms_result.get('message_id') or sms_result.get('reqid', ''),
+            delivery_report=sms_result.get('delivery_report', ''),
+            recipient_phone=phone,
+        )
         if sms_result.get('sent'):
             sent_at = timezone.now()
             nightly.sms_sent_at = sent_at
@@ -209,6 +320,7 @@ def send_pending_digests(*, activity_date=None, force=False):
                 'sent': sms_result.get('sent'),
                 'error': sms_result.get('error', ''),
                 'statement_url': statement_link(nightly.token),
+                'statement_sms_link': statement_sms_link_for_digest(nightly),
             }
         )
     return results

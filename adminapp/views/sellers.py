@@ -27,6 +27,7 @@ from ..services.data import (
     team_member_item,
 )
 from ..services.moderation import suspend_account, unsuspend_account
+from ..services.password_reset import reset_user_password
 from ..utils import csv_response, log_audit
 from .base import AdminAPIView
 
@@ -167,7 +168,10 @@ class SellerDetailView(AdminAPIView):
             seller = Seller.objects.get(pk=pk)
         except Seller.DoesNotExist:
             return Response({'detail': 'Seller not found.'}, status=status.HTTP_404_NOT_FOUND)
-        allowed = ('business_name', 'full_name', 'phone', 'address', 'gst_number', 'email')
+        allowed = (
+            'business_name', 'full_name', 'phone', 'address', 'gst_number', 'email',
+            'upi_id', 'bank_account_number', 'bank_ifsc', 'bank_account_holder',
+        )
         for field in allowed:
             if field in request.data:
                 setattr(seller, field, request.data[field])
@@ -191,11 +195,22 @@ class SellerResetPasswordView(AdminAPIView):
             seller = Seller.objects.get(pk=pk)
         except Seller.DoesNotExist:
             return Response({'detail': 'Seller not found.'}, status=status.HTTP_404_NOT_FOUND)
-        temp_password = secrets.token_urlsafe(10)
-        seller.set_password(temp_password)
-        seller.save(update_fields=['password'])
+
+        send_email = request.data.get('send_email', False)
+        password = request.data.get('password')
+        ok, payload = reset_user_password(
+            user=seller,
+            account_type='seller',
+            display_name=seller.full_name or seller.business_name,
+            send_email=send_email,
+            password=password,
+        )
+        if not ok:
+            code = status.HTTP_400_BAD_REQUEST if payload.get('code') == 'invalid_password' else status.HTTP_503_SERVICE_UNAVAILABLE
+            return Response(payload, status=code)
+
         log_audit(request.user, 'reset_password', 'seller', seller.pk, request=request)
-        return Response({'message': f'Password reset. Temporary password: {temp_password}'})
+        return Response(payload)
 
 
 class SellerSuspendView(AdminAPIView):

@@ -23,11 +23,27 @@ def _format_mobile_e164(phone):
 
 
 def _build_reminder_message(customer, seller):
-    return (
-        f'Reminder from {seller.business_name}: Dear {customer.name}, '
-        f'your outstanding balance is Rs. {customer.outstanding_amount}. '
-        f'Please pay at the earliest. - EAZYUDHAR'
-    )
+    business = (seller.business_name or seller.full_name or 'your shop').strip()
+    amount = customer.outstanding_amount
+    upi = (getattr(seller, 'upi_id', None) or '').strip()
+    lines = [
+        f'Hello {customer.name},',
+        '',
+        (
+            f'This is a payment reminder from {business}. '
+            f'Your outstanding amount is Rs. {amount}.'
+        ),
+        '',
+    ]
+    if upi:
+        lines.append(f'Please pay via UPI: {upi}')
+        lines.append('Scan the QR code shared by the shop to pay this amount.')
+        lines.append('')
+    else:
+        lines.append('Please make the payment when possible.')
+        lines.append('')
+    lines.append(f'- {business}')
+    return '\n'.join(lines)
 
 
 def _already_sent_today(seller, customer, channel, reminder_type):
@@ -42,7 +58,21 @@ def _already_sent_today(seller, customer, channel, reminder_type):
     ).exists()
 
 
-def _log_reminder(seller, customer, channel, reminder_type, success, error=''):
+def log_sms_delivery(
+    seller,
+    customer,
+    channel,
+    reminder_type,
+    success,
+    error='',
+    *,
+    message_body='',
+    template_id='',
+    provider_message_id='',
+    delivery_report='',
+    recipient_phone='',
+):
+    """Persist an SMS / reminder send for admin comms logs."""
     ReminderLog.objects.create(
         seller=seller,
         customer=customer,
@@ -50,6 +80,40 @@ def _log_reminder(seller, customer, channel, reminder_type, success, error=''):
         reminder_type=reminder_type,
         success=success,
         error_message=(error or '')[:500],
+        recipient_phone=(recipient_phone or customer.phone or '')[:20],
+        message_body=(message_body or '')[:4000],
+        template_id=(template_id or '')[:64],
+        provider_message_id=(provider_message_id or '')[:128],
+        delivery_report=(delivery_report or '')[:2000],
+    )
+
+
+def _log_reminder(
+    seller,
+    customer,
+    channel,
+    reminder_type,
+    success,
+    error='',
+    *,
+    message_body='',
+    template_id='',
+    provider_message_id='',
+    delivery_report='',
+    recipient_phone='',
+):
+    log_sms_delivery(
+        seller,
+        customer,
+        channel,
+        reminder_type,
+        success,
+        error,
+        message_body=message_body,
+        template_id=template_id,
+        provider_message_id=provider_message_id,
+        delivery_report=delivery_report,
+        recipient_phone=recipient_phone,
     )
 
 
@@ -109,6 +173,13 @@ def send_customer_reminder(
                 'error': sms_result.get('error', ''),
                 'message_id': sms_result.get('message_id', ''),
             }
+            if sent:
+                from .sms_pack_service import consume_sms_pack_credit
+                from .subscription_service import _sms_credits_from_pack
+
+                pack_needed = _sms_credits_from_pack(seller, 1)
+                if pack_needed > 0:
+                    consume_sms_pack_credit(seller, pack_needed)
             _log_reminder(
                 seller,
                 customer,
@@ -116,6 +187,11 @@ def send_customer_reminder(
                 reminder_type,
                 sent,
                 sms_result.get('error', ''),
+                message_body=sms_result.get('text') or message,
+                template_id=sms_result.get('template_id', ''),
+                provider_message_id=sms_result.get('message_id') or sms_result.get('reqid', ''),
+                delivery_report=sms_result.get('delivery_report', ''),
+                recipient_phone=customer.phone,
             )
 
     if 'whatsapp' in channels:
@@ -149,6 +225,8 @@ def send_customer_reminder(
                 reminder_type,
                 sent,
                 wa_result.get('error', ''),
+                message_body=message,
+                recipient_phone=customer.phone,
             )
 
     if 'push' in channels:
@@ -171,9 +249,15 @@ def send_customer_reminder(
             count = push_customer_notification(notification)
             push_sent = count > 0
             if not push_sent:
-                push_error = 'Push not delivered (disabled or no device token)'
+                push_error = (
+                    'Customer has not enabled app notifications. '
+                    'Ask them to open the EazyUdhar app and allow notifications.'
+                )
         else:
-            push_error = 'Customer app account not linked'
+            push_error = (
+                'Customer is not on the EazyUdhar app yet. '
+                'Ask them to sign up with the same phone number.'
+            )
         results['push'] = {
             'sent': push_sent,
             'channel': 'push',
@@ -187,6 +271,8 @@ def send_customer_reminder(
             reminder_type,
             push_sent,
             push_error,
+            message_body=message,
+            recipient_phone=customer.phone,
         )
 
     CustomerReminder.objects.create(

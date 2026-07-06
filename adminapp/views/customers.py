@@ -1,4 +1,3 @@
-import secrets
 
 from django.db.models import Q
 from rest_framework import status
@@ -25,6 +24,7 @@ from ..services.data import (
     shop_message_item,
 )
 from ..services.moderation import suspend_account, unsuspend_account
+from ..services.password_reset import reset_user_password
 from ..utils import csv_response, log_audit
 from .base import AdminAPIView
 
@@ -93,10 +93,49 @@ class CustomerDetailView(AdminAPIView):
             customer = Customer.objects.get(pk=pk)
         except Customer.DoesNotExist:
             return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        update_fields = []
         if 'promo_code' in request.data:
             customer.promo_code = request.data['promo_code'] or ''
-            customer.save(update_fields=['promo_code'])
-            log_audit(request.user, 'customer_promo_update', 'customer', customer.pk, request=request)
+            update_fields.append('promo_code')
+        if 'full_name' in request.data:
+            customer.full_name = (request.data['full_name'] or '').strip() or None
+            update_fields.append('full_name')
+        if 'phone' in request.data:
+            phone = (request.data['phone'] or '').strip()
+            if not phone:
+                return Response(
+                    {'detail': 'Phone cannot be empty.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            customer.phone = phone
+            update_fields.append('phone')
+        if 'email' in request.data:
+            email = (request.data['email'] or '').strip().lower()
+            if not email:
+                return Response(
+                    {'detail': 'Email cannot be empty.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if Customer.objects.exclude(pk=pk).filter(email__iexact=email).exists():
+                return Response(
+                    {'detail': 'Email already in use.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            customer.email = email
+            update_fields.append('email')
+
+        if update_fields:
+            update_fields.append('updated_at')
+            customer.save(update_fields=update_fields)
+            log_audit(
+                request.user,
+                'customer_update',
+                'customer',
+                customer.pk,
+                metadata={'fields': update_fields},
+                request=request,
+            )
         return Response(customer_detail(customer))
 
 
@@ -106,11 +145,22 @@ class CustomerResetPasswordView(AdminAPIView):
             customer = Customer.objects.get(pk=pk)
         except Customer.DoesNotExist:
             return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
-        temp_password = secrets.token_urlsafe(10)
-        customer.set_password(temp_password)
-        customer.save(update_fields=['password'])
+
+        send_email = request.data.get('send_email', False)
+        password = request.data.get('password')
+        ok, payload = reset_user_password(
+            user=customer,
+            account_type='customer',
+            display_name=customer.full_name or customer.username,
+            send_email=send_email,
+            password=password,
+        )
+        if not ok:
+            code = status.HTTP_400_BAD_REQUEST if payload.get('code') == 'invalid_password' else status.HTTP_503_SERVICE_UNAVAILABLE
+            return Response(payload, status=code)
+
         log_audit(request.user, 'reset_password', 'customer', customer.pk, request=request)
-        return Response({'message': f'Password reset. Temporary password: {temp_password}'})
+        return Response(payload)
 
 
 class CustomerSuspendView(AdminAPIView):

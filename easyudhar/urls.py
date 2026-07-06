@@ -3,13 +3,14 @@ from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
 
-from sellerapp.views.public_views import DayStatementPublicView
+from sellerapp.views.public_views import DayStatementPublicView, ShortStatementPublicView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('admin-api/v1/', include('adminapp.urls')),
     path('sapp/', include('customerapp.urls')),
     path('capp/', include('sellerapp.urls')),
+    path('s/<str:code>/', ShortStatementPublicView.as_view(), name='short-statement'),
     path('<str:token>/', DayStatementPublicView.as_view(), name='day-statement-public'),
 ]
 

@@ -1,0 +1,32 @@
+# Environment & secrets
+.env
+.env.local
+.env.production
+deploy/eazyudhar-server.env
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+myenv/
+.venv/
+
+# Django
+db.sqlite3
+db.sqlite3-journal
+staticfiles/
+media/
+
+# Data exports (may contain PII)
+data_export.json
+data_export/
+
+# Firebase keys (copy manually to server)
+firebase/*firebase-adminsdk*.json
+firebase/service-account.json
+
+# IDE
+.idea/
+.vscode/
+*.swp

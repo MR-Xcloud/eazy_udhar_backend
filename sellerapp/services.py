@@ -105,29 +105,43 @@ def refresh_due_status(customer, *, save=True):
 def refresh_overdue_for_seller(seller):
     """Mark customers overdue when their due date has passed."""
     today = timezone.localdate()
-    pending = SellerCustomer.objects.filter(
-        seller=seller,
-        outstanding_amount__gt=0,
-        next_due_date__lt=today,
-    ).exclude(status=SellerCustomer.STATUS_OVERDUE)
+    now = timezone.now()
+    pending = list(
+        SellerCustomer.objects.filter(
+            seller=seller,
+            outstanding_amount__gt=0,
+            next_due_date__lt=today,
+        ).exclude(status=SellerCustomer.STATUS_OVERDUE)
+    )
     for customer in pending:
         customer.status = SellerCustomer.STATUS_OVERDUE
-        customer.save(update_fields=['status', 'updated_at'])
+        customer.updated_at = now
+    if pending:
+        SellerCustomer.objects.bulk_update(pending, ['status', 'updated_at'])
 
-    cleared = SellerCustomer.objects.filter(
-        seller=seller,
-        outstanding_amount__gt=0,
-        status=SellerCustomer.STATUS_OVERDUE,
-    ).filter(
-        Q(next_due_date__isnull=True) | Q(next_due_date__gte=today)
+    cleared = list(
+        SellerCustomer.objects.filter(
+            seller=seller,
+            outstanding_amount__gt=0,
+            status=SellerCustomer.STATUS_OVERDUE,
+        ).filter(
+            Q(next_due_date__isnull=True) | Q(next_due_date__gte=today)
+        )
     )
     for customer in cleared:
         customer.status = SellerCustomer.STATUS_PENDING
-        customer.save(update_fields=['status', 'updated_at'])
+        customer.updated_at = now
+    if cleared:
+        SellerCustomer.objects.bulk_update(cleared, ['status', 'updated_at'])
 
 
-def customer_list_item(c):
-    latest_tx = c.transactions.first()
+def customer_list_item(c, *, latest_tx=None):
+    if latest_tx is None:
+        prefetched = getattr(c, 'latest_transactions', None)
+        if prefetched:
+            latest_tx = prefetched[0]
+        else:
+            latest_tx = c.transactions.first()
     last_at = latest_tx.effective_at if latest_tx else c.updated_at
     outstanding = c.outstanding_amount
     data = {
@@ -248,6 +262,8 @@ def _transaction_effective_date(tx):
 
 
 def dashboard_data(seller):
+    from django.db.models.functions import Coalesce, TruncDate
+
     refresh_overdue_for_seller(seller)
     customers = SellerCustomer.objects.filter(seller=seller)
     net = customers.aggregate(t=Sum('outstanding_amount'))['t'] or Decimal('0')
@@ -255,13 +271,16 @@ def dashboard_data(seller):
     total_pay = Decimal('0')
 
     today = timezone.localdate()
-    today_collection = Decimal('0')
-    for tx in LedgerTransaction.objects.filter(
-        seller=seller,
-        transaction_type=LedgerTransaction.TYPE_PAYMENT,
-    ).only('amount', 'created_at', 'device_created_at'):
-        if _transaction_effective_date(tx) == today:
-            today_collection += tx.amount
+    today_collection = (
+        LedgerTransaction.objects.filter(
+            seller=seller,
+            transaction_type=LedgerTransaction.TYPE_PAYMENT,
+        )
+        .annotate(effective_date=TruncDate(Coalesce('device_created_at', 'created_at')))
+        .filter(effective_date=today)
+        .aggregate(t=Sum('amount'))['t']
+        or Decimal('0')
+    )
 
     overdue_amount = customers.filter(status=SellerCustomer.STATUS_OVERDUE).aggregate(
         t=Sum('outstanding_amount')

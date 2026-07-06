@@ -15,6 +15,69 @@ from .models import (
 )
 
 
+def _ledger_line_type(tx_type):
+    """Map seller ledger types to customer statement line_type."""
+    from sellerapp.models import LedgerTransaction
+
+    if tx_type in (
+        LedgerTransaction.TYPE_PAYMENT,
+        LedgerTransaction.TYPE_ADVANCE_DEPOSIT,
+    ):
+        return 'payment'
+    return 'credit'
+
+
+def account_statement_payload(account, user):
+    """Full statement from seller ledger when linked; else cached lines."""
+    if account.seller_customer_id:
+        from sellerapp.services import customer_statement_report
+
+        report = customer_statement_report(account.seller_customer)
+        statement = []
+        for tx in report.get('transactions') or []:
+            statement.append(
+                {
+                    'id': tx.get('id'),
+                    'description': tx.get('description') or tx.get('title') or 'Transaction',
+                    'amount': str(tx.get('amount', 0)),
+                    'line_type': _ledger_line_type(tx.get('type')),
+                    'type': tx.get('type'),
+                    'date': tx.get('date_display') or tx.get('subtitle') or '',
+                    'payment_method': tx.get('payment_method_label')
+                    or tx.get('payment_method')
+                    or '',
+                    'debit_display': tx.get('debit_display'),
+                    'credit_display': tx.get('credit_display'),
+                    'balance_display': tx.get('balance_display'),
+                }
+            )
+        return {
+            'shop_id': str(account.id),
+            'shop_name': account.shop_name,
+            'customer_name': user.full_name or user.email,
+            'outstanding_amount': str(account.outstanding_amount),
+            'outstanding_display': report.get('outstanding_display'),
+            'wallet_display': report.get('wallet_display'),
+            'total_credit_display': report.get('total_credit_display'),
+            'total_collected_display': report.get('total_collected_display'),
+            'transaction_count': report.get('transaction_count', len(statement)),
+            'generated_at': report.get('generated_at'),
+            'statement': statement,
+            'transactions': report.get('transactions') or [],
+        }
+
+    lines = account.statement_lines.all()
+    from .serializers import StatementLineSerializer
+
+    return {
+        'shop_id': str(account.id),
+        'shop_name': account.shop_name,
+        'customer_name': user.full_name or user.email,
+        'outstanding_amount': str(account.outstanding_amount),
+        'statement': StatementLineSerializer(lines, many=True).data,
+    }
+
+
 def dashboard_summary(user):
     accounts = CustomerAccount.objects.filter(user=user, has_balance=True)
     all_accounts = CustomerAccount.objects.filter(user=user)

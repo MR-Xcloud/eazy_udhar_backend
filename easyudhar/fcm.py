@@ -14,18 +14,21 @@ def _firebase_dir():
 
 
 def resolve_firebase_credentials_path():
-    env_path = os.getenv('FIREBASE_CREDENTIALS_PATH', '').strip()
+    env_path = os.getenv('FIREBASE_CREDENTIALS_PATH', '').strip().strip('\r')
     if env_path:
-        return env_path
+        path = Path(env_path)
+        if path.is_file():
+            return str(path)
 
     firebase_dir = _firebase_dir()
     default_path = firebase_dir / 'service-account.json'
-    if default_path.exists():
+    if default_path.is_file():
         return str(default_path)
 
     for candidate in sorted(firebase_dir.glob('*firebase-adminsdk*.json')):
-        return str(candidate)
-    return ''
+        if candidate.is_file():
+            return str(candidate)
+    return env_path
 
 
 def resolve_firebase_project_id():

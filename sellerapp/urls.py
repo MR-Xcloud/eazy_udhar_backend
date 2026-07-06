@@ -51,6 +51,9 @@ from .views.seller_views import (
     UnifiedTransactionView,
 )
 from .views.subscription_views import (
+    SellerSmsPackCreateOrderView,
+    SellerSmsPackVerifyView,
+    SellerSmsPacksView,
     SellerSubscriptionCreateOrderView,
     SellerSubscriptionPlansView,
     SellerSubscriptionStatusView,
@@ -87,6 +90,21 @@ urlpatterns = [
         'seller/subscription/verify',
         SellerSubscriptionVerifyView.as_view(),
         name='seller-subscription-verify',
+    ),
+    path(
+        'seller/subscription/sms-packs',
+        SellerSmsPacksView.as_view(),
+        name='seller-sms-packs',
+    ),
+    path(
+        'seller/subscription/sms-packs/create-order',
+        SellerSmsPackCreateOrderView.as_view(),
+        name='seller-sms-pack-create-order',
+    ),
+    path(
+        'seller/subscription/sms-packs/verify',
+        SellerSmsPackVerifyView.as_view(),
+        name='seller-sms-pack-verify',
     ),
     path('seller/dashboard', SellerDashboardView.as_view(), name='seller-dashboard'),
     path('seller/sync/push', SellerSyncPushView.as_view(), name='seller-sync-push'),

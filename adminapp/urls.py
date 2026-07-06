@@ -46,6 +46,8 @@ from .views.moderation import (
     TicketReplyView,
 )
 from .views.promos import PromoCodeDetailView, PromoCodeListView, PromoRedemptionListView
+from .views.sms_packs import SmsPackDetailView, SmsPackListView
+from .views.sms_pack_orders import SmsPackOrderListView
 from .views.reports import (
     ReportsCollectionsView,
     ReportsDailySummaryView,
@@ -69,7 +71,12 @@ from .views.sellers import (
     SellerTeamView,
     SellerUnsuspendView,
 )
-from .views.shops import CustomerAccountsGlobalListView, SellerCustomersGlobalListView
+from .views.shops import (
+    CustomerAccountDetailView,
+    CustomerAccountsGlobalListView,
+    SellerCustomerDetailView,
+    SellerCustomersGlobalListView,
+)
 from .views.subscriptions import (
     InvoiceDownloadView,
     InvoiceListView,
@@ -163,6 +170,9 @@ urlpatterns = [
     # Subscriptions (static paths before <int:pk> patterns)
     path('subscriptions/plans', SubscriptionPlanListView.as_view(), name='admin-subscription-plans'),
     path('subscriptions/plans/<int:pk>', SubscriptionPlanDetailView.as_view(), name='admin-subscription-plan-detail'),
+    path('sms-packs', SmsPackListView.as_view(), name='admin-sms-packs'),
+    path('sms-packs/orders', SmsPackOrderListView.as_view(), name='admin-sms-pack-orders'),
+    path('sms-packs/<int:pk>', SmsPackDetailView.as_view(), name='admin-sms-pack-detail'),
     path('subscriptions/invoices', InvoiceListView.as_view(), name='admin-subscription-invoices'),
     path('subscriptions/invoices/<int:pk>/download', InvoiceDownloadView.as_view(), name='admin-subscription-invoice-download'),
     path('subscriptions', SubscriptionListView.as_view(), name='admin-subscriptions'),
@@ -195,7 +205,9 @@ urlpatterns = [
     path('promo-redemptions', PromoRedemptionListView.as_view(), name='admin-promo-redemptions'),
     # Shops
     path('seller-customers', SellerCustomersGlobalListView.as_view(), name='admin-seller-customers-global'),
+    path('seller-customers/<uuid:pk>', SellerCustomerDetailView.as_view(), name='admin-seller-customer-detail'),
     path('customer-accounts', CustomerAccountsGlobalListView.as_view(), name='admin-customer-accounts-global'),
+    path('customer-accounts/<uuid:pk>', CustomerAccountDetailView.as_view(), name='admin-customer-account-detail'),
     # Moderation
     path('suspensions', SuspensionListView.as_view(), name='admin-suspensions'),
     path('messages', MessageListView.as_view(), name='admin-messages'),

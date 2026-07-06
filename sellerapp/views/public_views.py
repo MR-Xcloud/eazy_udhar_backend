@@ -45,21 +45,57 @@ def _transaction_line(tx, *, include_date=False):
     }
 
 
+class ShortStatementPublicView(View):
+    """Public statement via SMS short link: https://api.eazyudhar.com/s/<code>"""
+
+    def get(self, request, code):
+        nightly = CustomerNightlyDigest.objects.filter(short_code=code).first()
+        if nightly:
+            return DayStatementPublicView()._render_merged(request, nightly)
+
+        digest = (
+            CustomerDayDigest.objects.select_related(
+                'seller_customer',
+                'seller_customer__seller',
+            )
+            .filter(short_code=code)
+            .first()
+        )
+        if digest:
+            return DayStatementPublicView()._render_single(request, digest)
+
+        from django.http import Http404
+
+        raise Http404('Statement link not found or expired.')
+
+
 class DayStatementPublicView(View):
     """Public account statement: https://eazy-udhar-backend.onrender.com/<token>"""
 
     def get(self, request, token):
         nightly = CustomerNightlyDigest.objects.filter(token=token).first()
+        if not nightly:
+            nightly = CustomerNightlyDigest.objects.filter(short_code=token).first()
         if nightly:
             return self._render_merged(request, nightly)
 
-        digest = get_object_or_404(
-            CustomerDayDigest.objects.select_related(
-                'seller_customer',
-                'seller_customer__seller',
-            ),
-            token=token,
-        )
+        digest = CustomerDayDigest.objects.select_related(
+            'seller_customer',
+            'seller_customer__seller',
+        ).filter(token=token).first()
+        if not digest:
+            digest = (
+                CustomerDayDigest.objects.select_related(
+                    'seller_customer',
+                    'seller_customer__seller',
+                )
+                .filter(short_code=token)
+                .first()
+            )
+        if not digest:
+            from django.http import Http404
+
+            raise Http404('Statement link not found or expired.')
         return self._render_single(request, digest)
 
     def _render_merged(self, request, nightly):

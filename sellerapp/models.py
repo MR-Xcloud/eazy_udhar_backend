@@ -244,6 +244,11 @@ class ReminderLog(models.Model):
     reminder_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_MANUAL)
     success = models.BooleanField(default=False)
     error_message = models.CharField(max_length=500, blank=True)
+    recipient_phone = models.CharField(max_length=20, blank=True)
+    message_body = models.TextField(blank=True)
+    template_id = models.CharField(max_length=64, blank=True)
+    provider_message_id = models.CharField(max_length=128, blank=True)
+    delivery_report = models.TextField(blank=True)
     sent_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -283,6 +288,10 @@ class SellerSettings(models.Model):
     daily_summary_enabled = models.BooleanField(default=True)
     daily_summary_time = models.CharField(max_length=5, default='21:00')
     daily_summary_channels = models.JSONField(default=list)
+    sms_pack_balance = models.PositiveIntegerField(
+        default=0,
+        help_text='Prepaid SMS credits purchased via SMS packs (top-up).',
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
@@ -357,6 +366,7 @@ class CustomerDayDigest(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     token = models.CharField(max_length=64, unique=True, db_index=True)
+    short_code = models.CharField(max_length=12, unique=True, blank=True, db_index=True)
     seller_customer = models.ForeignKey(
         SellerCustomer,
         on_delete=models.CASCADE,
@@ -388,6 +398,7 @@ class CustomerNightlyDigest(models.Model):
     phone = models.CharField(max_length=10, db_index=True)
     activity_date = models.DateField()
     token = models.CharField(max_length=64, unique=True, db_index=True)
+    short_code = models.CharField(max_length=12, unique=True, blank=True, db_index=True)
     sms_sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -477,6 +488,42 @@ class SellerSubscriptionOrder(models.Model):
 
     def __str__(self):
         return f'{self.reference_id} — {self.plan_name} ({self.status})'
+
+
+class SellerSmsPackOrder(models.Model):
+    """Prepaid SMS pack checkout — settles to EazyUdhar merchant account."""
+
+    STATUS_PENDING = 'pending'
+    STATUS_PAID = 'paid'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    seller = models.ForeignKey(
+        Seller, on_delete=models.CASCADE, related_name='sms_pack_orders'
+    )
+    pack_slug = models.CharField(max_length=100)
+    pack_name = models.CharField(max_length=120)
+    sms_quantity = models.PositiveIntegerField()
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default='INR')
+    reference_id = models.CharField(max_length=100, unique=True)
+    razorpay_order_id = models.CharField(max_length=100, unique=True, db_index=True)
+    razorpay_payment_id = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.reference_id} — {self.pack_name} ({self.status})'
 
 
 class SellerPaymentLink(models.Model):

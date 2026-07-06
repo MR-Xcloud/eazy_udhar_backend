@@ -1,5 +1,3 @@
-import secrets
-
 from django.conf import settings
 from django.core.management import call_command
 from django.utils import timezone
@@ -9,6 +7,7 @@ from rest_framework.response import Response
 from ..models import AdminUser, AuditLog, CronJobStatus
 from ..permissions import RoleRequired
 from ..serializers import AdminUserSerializer
+from ..services.password_reset import reset_user_password
 from ..utils import log_audit
 from .base import AdminAPIView
 
@@ -117,11 +116,22 @@ class AdminUserResetPasswordView(AdminAPIView):
             user = AdminUser.objects.get(pk=pk)
         except AdminUser.DoesNotExist:
             return Response({'detail': 'Admin not found.'}, status=status.HTTP_404_NOT_FOUND)
-        temp_password = secrets.token_urlsafe(10)
-        user.set_password(temp_password)
-        user.save(update_fields=['password'])
+
+        send_email = request.data.get('send_email', False)
+        password = request.data.get('password')
+        ok, payload = reset_user_password(
+            user=user,
+            account_type='admin',
+            display_name=user.full_name or user.email,
+            send_email=send_email,
+            password=password,
+        )
+        if not ok:
+            code = status.HTTP_400_BAD_REQUEST if payload.get('code') == 'invalid_password' else status.HTTP_503_SERVICE_UNAVAILABLE
+            return Response(payload, status=code)
+
         log_audit(request.user, 'admin_reset_password', 'admin', user.pk, request=request)
-        return Response({'message': f'Password reset. Temporary password: {temp_password}'})
+        return Response(payload)
 
 
 class CronJobListView(AdminAPIView):

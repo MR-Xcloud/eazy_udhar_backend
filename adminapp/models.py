@@ -67,6 +67,30 @@ class SubscriptionPlan(models.Model):
         return self.name
 
 
+class SmsPack(models.Model):
+    """Prepaid SMS bundles (quantity + per-SMS rate + GST)."""
+
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(unique=True, max_length=100)
+    sms_quantity = models.PositiveIntegerField()
+    unit_price_paise = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        help_text='Price per SMS in paise (e.g. 25 or 22.5)',
+    )
+    gst_percent = models.DecimalField(max_digits=5, decimal_places=2, default=18)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['sort_order', 'sms_quantity']
+
+    def __str__(self):
+        return f'{self.name} — {self.sms_quantity} SMS @ {self.unit_price_paise}p'
+
+
 class SellerSubscription(models.Model):
     STATUS_TRIAL = 'trial'
     STATUS_ACTIVE = 'active'

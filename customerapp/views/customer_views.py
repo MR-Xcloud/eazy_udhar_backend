@@ -30,9 +30,13 @@ from ..serializers import (
     PaymentSerializer,
     ProfileSerializer,
     SettingsSerializer,
-    StatementLineSerializer,
 )
-from ..services import dashboard_summary, payment_history, payment_summary
+from ..services import (
+    account_statement_payload,
+    dashboard_summary,
+    payment_history,
+    payment_summary,
+)
 from ..sync_service import CustomerSyncError, parse_since, pull_customer_changes
 from sellerapp.services import advance_summary
 from ..utils import customer_to_dict
@@ -49,7 +53,6 @@ class CustomerDashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        sync_customer_from_seller_ledgers(request.user)
         return Response(dashboard_summary(request.user))
 
 
@@ -57,7 +60,6 @@ class CustomerAccountsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        sync_customer_from_seller_ledgers(request.user)
         qs = CustomerAccount.objects.filter(user=request.user).select_related(
             'seller', 'seller_customer__seller'
         )
@@ -109,16 +111,7 @@ class AccountStatementView(APIView):
 
     def get(self, request, shop_id):
         account = get_object_or_404(CustomerAccount, id=shop_id, user=request.user)
-        lines = account.statement_lines.all()
-        return Response(
-            {
-                'shop_id': str(account.id),
-                'shop_name': account.shop_name,
-                'customer_name': request.user.full_name or request.user.email,
-                'outstanding_amount': str(account.outstanding_amount),
-                'statement': StatementLineSerializer(lines, many=True).data,
-            }
-        )
+        return Response(account_statement_payload(account, request.user))
 
 
 class UnreadNotificationCountView(APIView):
