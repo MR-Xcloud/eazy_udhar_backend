@@ -7,6 +7,7 @@ from .models import (
     AdminUser,
     AuditLog,
     CronJobStatus,
+    LegalDocument,
     PromoCode,
     PromoRedemption,
     RazorpayPayment,
@@ -237,6 +238,14 @@ class TicketReplyAdmin(admin.ModelAdmin):
     search_fields = ('body', 'ticket__subject', 'admin__email')
     list_select_related = ('ticket', 'admin')
     readonly_fields = ('created_at',)
+
+
+@admin.register(LegalDocument)
+class LegalDocumentAdmin(admin.ModelAdmin):
+    list_display = ('title', 'slug', 'version', 'effective_date', 'is_published', 'updated_at')
+    list_filter = ('is_published', 'slug')
+    search_fields = ('title', 'slug', 'body')
+    readonly_fields = ('created_at', 'updated_at')
 
 
 @admin.register(CronJobStatus)

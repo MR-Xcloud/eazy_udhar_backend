@@ -50,6 +50,8 @@ from .views.seller_views import (
     TeamView,
     UnifiedTransactionView,
 )
+from easyudhar.legal_views import PublicLegalDocumentDetailView, PublicLegalDocumentListView
+
 from .views.subscription_views import (
     SellerSmsPackCreateOrderView,
     SellerSmsPackVerifyView,
@@ -69,6 +71,9 @@ urlpatterns = [
     path('auth/forgot-password', ForgotPasswordView.as_view(), name='seller-forgot-password'),
     path('auth/refresh', SellerTokenRefreshView.as_view(), name='seller-token-refresh'),
     path('auth/logout', LogoutView.as_view(), name='seller-logout'),
+    # Legal — public (login / signup screens)
+    path('legal', PublicLegalDocumentListView.as_view(), name='seller-legal-list'),
+    path('legal/<slug:slug>', PublicLegalDocumentDetailView.as_view(), name='seller-legal-detail'),
     # P0 — Home & customers
     path('seller/me', SellerMeView.as_view(), name='seller-me'),
     path(

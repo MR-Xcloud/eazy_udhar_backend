@@ -36,6 +36,7 @@ from .views.layout import (
     AdminNotificationsView,
     GlobalSearchView,
 )
+from .views.legal import LegalDocumentDetailView, LegalDocumentListView
 from .views.moderation import (
     MessageDeleteView,
     MessageFlagView,
@@ -229,4 +230,7 @@ urlpatterns = [
     path('system/cron/<str:job>/trigger', CronJobTriggerView.as_view(), name='admin-system-cron-trigger'),
     path('system/health', SystemHealthView.as_view(), name='admin-system-health'),
     path('audit-log', AuditLogListView.as_view(), name='admin-audit-log'),
+    # Legal documents
+    path('legal-documents', LegalDocumentListView.as_view(), name='admin-legal-documents'),
+    path('legal-documents/<int:pk>', LegalDocumentDetailView.as_view(), name='admin-legal-document-detail'),
 ]

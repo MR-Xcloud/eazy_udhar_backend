@@ -31,6 +31,8 @@ from .views.customer_views import (
     SettingsView,
     UnreadNotificationCountView,
 )
+from easyudhar.legal_views import PublicLegalDocumentDetailView, PublicLegalDocumentListView
+
 from .views.payment_views import (
     PaymentMethodsCatalogView,
     RazorpayConfigView,
@@ -50,6 +52,9 @@ urlpatterns = [
     path('auth/otp/verify', OTPVerifyView.as_view(), name='otp-verify'),
     path('auth/refresh', TokenRefreshAPIView.as_view(), name='token-refresh'),
     path('auth/logout', LogoutView.as_view(), name='logout'),
+    # Legal — public (login / signup screens)
+    path('legal', PublicLegalDocumentListView.as_view(), name='customer-legal-list'),
+    path('legal/<slug:slug>', PublicLegalDocumentDetailView.as_view(), name='customer-legal-detail'),
     # Home — customer_home_screen
     path('customer/me', CustomerMeView.as_view(), name='customer-me'),
     path('customer/dashboard', CustomerDashboardView.as_view(), name='customer-dashboard'),

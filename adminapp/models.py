@@ -452,6 +452,30 @@ class TicketReply(models.Model):
         return f'Reply to {self.ticket_id} at {self.created_at}'
 
 
+class LegalDocument(models.Model):
+    SLUG_PRIVACY_POLICY = 'privacy-policy'
+    SLUG_TERMS_OF_SERVICE = 'terms-of-service'
+    SLUG_CHOICES = [
+        (SLUG_PRIVACY_POLICY, 'Privacy Policy'),
+        (SLUG_TERMS_OF_SERVICE, 'Terms of Service'),
+    ]
+
+    slug = models.SlugField(max_length=100, unique=True, choices=SLUG_CHOICES)
+    title = models.CharField(max_length=200)
+    body = models.TextField()
+    version = models.CharField(max_length=20, default='1.0')
+    effective_date = models.DateField(null=True, blank=True)
+    is_published = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['slug']
+
+    def __str__(self):
+        return self.title
+
+
 class CronJobStatus(models.Model):
     LAST_STATUS_SUCCESS = 'success'
     LAST_STATUS_FAILED = 'failed'
