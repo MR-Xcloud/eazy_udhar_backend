@@ -1,15 +1,17 @@
 # Cron for EazyUdhar background jobs (user deveazy, no sudo)
 #
 # Install (as deveazy):
-#   mkdir -p /home/deveazy/easyudhar/logs
+#   mkdir -p /home/deveazy/easyudhar/logs /home/deveazy/db_backups
+#   chmod +x /home/deveazy/easyudhar/deploy/backup_db.sh
 #   crontab -e
-#   Paste the three job lines below (without the leading # comments on schedule lines).
+#   Paste the job lines below (schedule lines only — no leading # on those).
 #
 # Or with root:
 #   sudo cp deploy/cron-eazyudhar /etc/cron.d/eazyudhar && sudo chmod 644 /etc/cron.d/eazyudhar
 #
 # Django loads /home/deveazy/easyudhar/.env automatically — do NOT source .env in cron.
 # Reminders + daily summary run hourly; each seller's SellerSettings time picks who gets mail.
+# DB backup reads .env via deploy/backup_db.sh (safe with special chars in password).
 
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -22,3 +24,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 15:30 UTC = 21:00 IST — nightly customer digest SMS (statement links)
 30 15 * * * cd /home/deveazy/easyudhar && /home/deveazy/venv/bin/python manage.py send_nightly_sms >> /home/deveazy/easyudhar/logs/cron.log 2>&1
+
+# 20:30 UTC = 02:00 IST — daily MySQL dump (keeps last 14 days in /home/deveazy/db_backups)
+30 20 * * * /home/deveazy/easyudhar/deploy/backup_db.sh >> /home/deveazy/easyudhar/logs/db_backup.log 2>&1

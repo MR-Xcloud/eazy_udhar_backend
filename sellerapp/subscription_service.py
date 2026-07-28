@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
 from django.utils import timezone
@@ -20,6 +20,25 @@ from easyudhar.razorpay_config import get_razorpay_credentials
 from .models import SellerSubscriptionOrder
 
 TRIAL_DAYS = 7
+SUBSCRIPTION_GST_PERCENT = Decimal('18')
+
+
+def _money(value):
+    return value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def _with_gst(subtotal):
+    """Plan prices are exclusive of GST; return subtotal / gst / total."""
+    subtotal = _money(Decimal(str(subtotal)))
+    gst_amount = _money(subtotal * SUBSCRIPTION_GST_PERCENT / Decimal('100'))
+    total = _money(subtotal + gst_amount)
+    return {
+        'subtotal': subtotal,
+        'gst_percent': float(SUBSCRIPTION_GST_PERCENT),
+        'gst_amount': gst_amount,
+        'total': total,
+        'price_note': f'All prices are exclusive of {float(SUBSCRIPTION_GST_PERCENT):g}% GST',
+    }
 
 
 class SubscriptionQuotaError(Exception):
@@ -234,12 +253,20 @@ def start_seller_trial(seller):
 def plan_to_dict(plan):
     features = _plan_features(plan)
     reminder_type = features.get('reminder_type', 'on_demand')
+    monthly = _with_gst(plan.price_monthly)
+    yearly = _with_gst(plan.price_yearly)
     return {
         'id': plan.id,
         'name': plan.name,
         'slug': plan.slug,
         'price_monthly': float(plan.price_monthly),
         'price_yearly': float(plan.price_yearly),
+        'gst_percent': monthly['gst_percent'],
+        'price_monthly_gst': float(monthly['gst_amount']),
+        'price_monthly_total': float(monthly['total']),
+        'price_yearly_gst': float(yearly['gst_amount']),
+        'price_yearly_total': float(yearly['total']),
+        'price_note': monthly['price_note'],
         'message_limit': int(features.get('message_limit', 0)),
         'reminder_type': reminder_type,
         'reminder_label': features.get(
@@ -320,15 +347,15 @@ def subscription_status_payload(seller):
     }
 
 
-def _plan_amount(plan, billing_cycle):
+def _plan_pricing(plan, billing_cycle):
     if billing_cycle == SellerSubscriptionOrder.CYCLE_YEARLY:
-        amount = plan.price_yearly
+        subtotal = plan.price_yearly
     else:
-        amount = plan.price_monthly
-    amount = Decimal(str(amount))
-    if amount <= 0:
+        subtotal = plan.price_monthly
+    subtotal = Decimal(str(subtotal))
+    if subtotal <= 0:
         raise RazorpayError('This plan is not available for purchase.', code='invalid_plan')
-    return amount
+    return _with_gst(subtotal)
 
 
 @transaction.atomic
@@ -353,7 +380,8 @@ def create_subscription_order(*, seller, plan_slug, billing_cycle):
     if plan is None or not _is_purchasable(plan):
         raise RazorpayError('Subscription plan not found.', code='invalid_plan')
 
-    amount = _plan_amount(plan, billing_cycle)
+    pricing = _plan_pricing(plan, billing_cycle)
+    amount = pricing['total']  # charge base + 18% GST
     reference_id = f'SUB-{uuid.uuid4().hex[:12].upper()}'
     amount_paise = _amount_paise(amount)
 
@@ -366,6 +394,9 @@ def create_subscription_order(*, seller, plan_slug, billing_cycle):
             'seller_id': str(seller.id),
             'plan_slug': plan.slug,
             'billing_cycle': billing_cycle,
+            'subtotal_inr': str(pricing['subtotal']),
+            'gst_percent': str(pricing['gst_percent']),
+            'gst_amount_inr': str(pricing['gst_amount']),
         },
     }
     rz_order = _razorpay_request('POST', '/orders', order_payload)
@@ -391,6 +422,11 @@ def create_subscription_order(*, seller, plan_slug, billing_cycle):
         'plan_name': plan.name,
         'billing_cycle': billing_cycle,
         'amount_display': float(amount),
+        'subtotal_inr': float(pricing['subtotal']),
+        'gst_percent': pricing['gst_percent'],
+        'gst_amount_inr': float(pricing['gst_amount']),
+        'total_inr': float(pricing['total']),
+        'price_note': pricing['price_note'],
     }
 
 

@@ -130,8 +130,35 @@ def send_customer_reminder(
     Send reminder on requested channels.
     Returns dict with sms/whatsapp/push results per app contract.
     """
+    mobile_display = _format_mobile_e164(customer.phone)
+    if not getattr(seller, 'is_active', True):
+        skipped = {
+            'sent': False,
+            'error': 'Seller account suspended',
+            'skipped': True,
+        }
+        return {
+            'message': 'Seller account is suspended.',
+            'sms': {**skipped, 'channel': 'sms', 'to': mobile_display},
+            'whatsapp': {**skipped, 'channel': 'whatsapp', 'to': mobile_display},
+            'push': {**skipped, 'channel': 'push', 'to': ''},
+        }
+
+    linked = getattr(customer, 'linked_customer', None)
+    if linked is not None and not linked.is_active:
+        skipped = {
+            'sent': False,
+            'error': 'Customer account suspended',
+            'skipped': True,
+        }
+        return {
+            'message': 'Customer account is suspended.',
+            'sms': {**skipped, 'channel': 'sms', 'to': mobile_display},
+            'whatsapp': {**skipped, 'channel': 'whatsapp', 'to': mobile_display},
+            'push': {**skipped, 'channel': 'push', 'to': ''},
+        }
+
     if customer.outstanding_amount <= 0:
-        mobile_display = _format_mobile_e164(customer.phone)
         skipped = {
             'sent': False,
             'error': 'No outstanding balance',
@@ -309,7 +336,12 @@ def resolve_reminder_channels(seller, channels=None):
 
 def customers_for_auto_remind(seller, days_before=1):
     """Customers with outstanding balance due for automatic reminder."""
-    qs = SellerCustomer.objects.filter(seller=seller, outstanding_amount__gt=0)
+    from django.db.models import Q
+
+    # Exclude linked app customers who are suspended; ledger-only contacts still allowed.
+    qs = SellerCustomer.objects.filter(seller=seller, outstanding_amount__gt=0).filter(
+        Q(linked_customer__isnull=True) | Q(linked_customer__is_active=True)
+    )
     if days_before <= 0:
         return qs.filter(status=SellerCustomer.STATUS_OVERDUE)
     return qs.filter(

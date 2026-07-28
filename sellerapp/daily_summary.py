@@ -59,6 +59,9 @@ def build_seller_summary(seller):
 
 
 def send_daily_summary_for_seller(seller, *, force=False):
+    if not seller.is_active:
+        return {'skipped': True, 'reason': 'seller suspended'}
+
     settings, _ = SellerSettings.objects.get_or_create(seller=seller)
     if not settings.daily_summary_enabled and not force:
         return {'skipped': True, 'reason': 'disabled'}
@@ -91,7 +94,8 @@ def send_daily_summary_for_seller(seller, *, force=False):
 
 def run_daily_summaries(*, force=False):
     results = []
-    for seller in Seller.objects.all():
+    # Only active (non-suspended) sellers.
+    for seller in Seller.objects.filter(is_active=True):
         try:
             row = send_daily_summary_for_seller(seller, force=force)
             results.append({'seller': seller.business_name, **row})

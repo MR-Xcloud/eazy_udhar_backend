@@ -20,7 +20,8 @@ def is_auto_remind_due_now(settings_row, now=None):
 
 def run_auto_reminders(*, force=False):
     results = []
-    for seller in Seller.objects.select_related('settings').all():
+    # Only active (non-suspended) sellers — suspended accounts must not get outbound SMS.
+    for seller in Seller.objects.filter(is_active=True).select_related('settings'):
         settings, _ = SellerSettings.objects.get_or_create(seller=seller)
         if not settings.auto_remind_enabled and not force:
             continue

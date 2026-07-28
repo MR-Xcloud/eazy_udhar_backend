@@ -228,10 +228,21 @@ def send_pending_digests(*, activity_date=None, force=False):
     if activity_date is None:
         activity_date = timezone.localdate()
 
+    from django.db.models import Q
+
+    # Skip digests for suspended sellers, and for linked app customers who are suspended.
     qs = CustomerDayDigest.objects.filter(
         activity_date=activity_date,
         transaction_count__gt=0,
-    ).select_related('seller_customer', 'seller_customer__seller')
+        seller_customer__seller__is_active=True,
+    ).filter(
+        Q(seller_customer__linked_customer__isnull=True)
+        | Q(seller_customer__linked_customer__is_active=True)
+    ).select_related(
+        'seller_customer',
+        'seller_customer__seller',
+        'seller_customer__linked_customer',
+    )
     if not force:
         qs = qs.filter(sms_sent_at__isnull=True)
 

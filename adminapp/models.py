@@ -179,6 +179,7 @@ class SubscriptionInvoice(models.Model):
     period_start = models.DateTimeField()
     period_end = models.DateTimeField()
     pdf_url = models.URLField(blank=True)
+    emailed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
