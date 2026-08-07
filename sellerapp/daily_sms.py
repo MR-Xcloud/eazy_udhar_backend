@@ -218,10 +218,21 @@ def _group_pending_digests(qs):
     return groups
 
 
+def seller_auto_sms_enabled(seller):
+    """Nightly transaction SMS follows the same auto-remind switch as payment reminders."""
+    from .models import SellerSettings
+
+    settings_row, _ = SellerSettings.objects.get_or_create(seller=seller)
+    return bool(settings_row.auto_remind_enabled)
+
+
 def send_pending_digests(*, activity_date=None, force=False):
     """
     Send one merged digest SMS per customer phone for the given activity date.
     A customer with activity at multiple shops gets a single SMS at night.
+
+    Digests from sellers with auto_remind_enabled=False are skipped (same switch
+    as automatic payment reminders), unless force=True.
     """
     from .nimbus_sms import nimbus_sms_configured, send_merged_nightly_digest_sms
 
@@ -241,6 +252,7 @@ def send_pending_digests(*, activity_date=None, force=False):
     ).select_related(
         'seller_customer',
         'seller_customer__seller',
+        'seller_customer__seller__settings',
         'seller_customer__linked_customer',
     )
     if not force:
@@ -248,6 +260,35 @@ def send_pending_digests(*, activity_date=None, force=False):
 
     results = []
     for phone, digests in _group_pending_digests(qs).items():
+        if not force:
+            enabled = []
+            skipped_disabled = []
+            for digest in digests:
+                if seller_auto_sms_enabled(digest.seller_customer.seller):
+                    enabled.append(digest)
+                else:
+                    skipped_disabled.append(digest)
+            if skipped_disabled:
+                now = timezone.now()
+                for digest in skipped_disabled:
+                    if digest.sms_sent_at is None:
+                        digest.sms_sent_at = now
+                        digest.save(update_fields=['sms_sent_at', 'updated_at'])
+                results.append(
+                    {
+                        'phone': phone,
+                        'customer': skipped_disabled[0].seller_customer.name,
+                        'shops': len(skipped_disabled),
+                        'sent': False,
+                        'error': '',
+                        'skipped': True,
+                        'reason': 'auto_remind_disabled',
+                    }
+                )
+            digests = enabled
+            if not digests:
+                continue
+
         nightly = ensure_nightly_digest(phone, activity_date)
         if not force and nightly.sms_sent_at:
             now = nightly.sms_sent_at

@@ -61,6 +61,7 @@ from .views.subscription_views import (
     SellerSubscriptionStatusView,
     SellerSubscriptionVerifyView,
 )
+from .views.contact_views import SellerContactUsView
 
 urlpatterns = [
     # P0 — Auth
@@ -211,6 +212,7 @@ urlpatterns = [
     ),
     # P2 — Settings & business
     path('seller/settings', SettingsView.as_view(), name='seller-settings'),
+    path('seller/contact-us', SellerContactUsView.as_view(), name='seller-contact-us'),
     path('seller/business', BusinessView.as_view(), name='seller-business'),
     path('seller/team', TeamView.as_view(), name='seller-team'),
     # Notifications — seller home bell

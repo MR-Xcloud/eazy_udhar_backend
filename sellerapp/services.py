@@ -335,10 +335,17 @@ def add_credit(
     from customerapp.models import CustomerNotification
     from django.conf import settings
 
-    from .daily_sms import queued_sms_result, record_daily_activity
+    from .daily_sms import queued_sms_result, record_daily_activity, seller_auto_sms_enabled
 
     if send_sms is None:
         send_sms = settings.NIMBUS_SMS_ENABLED
+    if send_sms and not seller_auto_sms_enabled(seller):
+        send_sms = False
+        print(
+            f'[EasyUdhar SMS] add_credit — SMS skipped (auto_remind_disabled) '
+            f'seller={seller.business_name}',
+            flush=True,
+        )
 
     parsed_due = None
     if due_date is not None:
@@ -448,10 +455,17 @@ def _receive_payment(
     from customerapp.models import CustomerNotification
     from django.conf import settings
 
-    from .daily_sms import queued_sms_result, record_daily_activity
+    from .daily_sms import queued_sms_result, record_daily_activity, seller_auto_sms_enabled
 
     if send_sms is None:
         send_sms = settings.NIMBUS_SMS_ENABLED
+    if send_sms and not seller_auto_sms_enabled(seller):
+        send_sms = False
+        print(
+            f'[EasyUdhar SMS] receive_payment — SMS skipped (auto_remind_disabled) '
+            f'seller={seller.business_name}',
+            flush=True,
+        )
 
     pay = Decimal(str(amount))
     outstanding = customer.outstanding_amount

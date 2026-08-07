@@ -247,6 +247,11 @@ OTP_EXPIRY_MINUTES = env_int('OTP_EXPIRY_MINUTES', '5')
 OTP_RESEND_COOLDOWN_SECONDS = env_int('OTP_RESEND_COOLDOWN_SECONDS', '60')
 OTP_EMAIL_LOGO_URL = env('OTP_EMAIL_LOGO_URL')
 
+# ── Telegram support bot ───────────────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN = env('TELEGRAM_BOT_TOKEN')
+TELEGRAM_BOT_USERNAME = env('TELEGRAM_BOT_USERNAME')  # without @, e.g. EazyUdharSupportBot
+SUPPORT_EMAIL = env('SUPPORT_EMAIL', 'support@eazyudhar.com')
+
 # ── WhatsApp (optional) ────────────────────────────────────────────────────────
 WHATSAPP_API_ENABLED = env_bool('WHATSAPP_API_ENABLED', 'false')
 WHATSAPP_ACCESS_TOKEN = env('WHATSAPP_ACCESS_TOKEN')
