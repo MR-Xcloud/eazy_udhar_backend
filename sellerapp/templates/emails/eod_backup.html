@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>Your EazyUdhar end-of-day backup</title>
+  <!--[if mso]><style>table{border-collapse:collapse;}</style><![endif]-->
+</head>
+<body style="margin:0;padding:0;background:#eef2f5;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a;-webkit-font-smoothing:antialiased;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#eef2f5;font-size:1px;line-height:1px;">
+    Today: {{ today_collection_display }} collected · {{ outstanding_display }} outstanding · your full transaction backup is attached.
+  </div>
+
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef2f5;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 6px 24px rgba(15,118,110,0.10);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:#ffffff;padding:28px 32px 20px;border-bottom:1px solid #eef2f5;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td valign="middle" style="width:55%;">
+                    <h1 style="margin:0;font-size:22px;font-weight:700;color:#0f766e;letter-spacing:0.3px;">EazyUdhar</h1>
+                    <p style="margin:6px 0 0;font-size:13px;color:#14b8a6;letter-spacing:0.2px;">End-of-day transaction backup</p>
+                  </td>
+                  <td valign="middle" align="right" style="width:45%;">
+                    <img
+                      src="{{ logo_url }}"
+                      alt="EazyUdhar"
+                      width="118"
+                      style="display:block;max-width:118px;height:auto;margin-left:auto;border:0;outline:none;text-decoration:none;"
+                    />
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Greeting -->
+          <tr>
+            <td style="padding:28px 32px 4px;">
+              <p style="margin:0 0 6px;font-size:17px;font-weight:600;line-height:1.5;color:#0f172a;">Hi {{ display_name }},</p>
+              <p style="margin:0 0 20px;font-size:14px;line-height:1.65;color:#475569;">
+                Here's your business snapshot for <strong>{{ report_date }}</strong>. Your full ledger — every credit, payment
+                and advance to date — is attached as an Excel backup, so you always have your own copy.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Stat cards -->
+          <tr>
+            <td style="padding:0 24px 8px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td width="50%" style="padding:8px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;">
+                      <tr><td style="padding:16px 18px;">
+                        <div style="font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#15803d;margin-bottom:6px;">Collected Today</div>
+                        <div style="font-size:22px;font-weight:700;color:#166534;">{{ today_collection_display }}</div>
+                      </td></tr>
+                    </table>
+                  </td>
+                  <td width="50%" style="padding:8px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;">
+                      <tr><td style="padding:16px 18px;">
+                        <div style="font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#c2410c;margin-bottom:6px;">Outstanding</div>
+                        <div style="font-size:22px;font-weight:700;color:#9a3412;">{{ outstanding_display }}</div>
+                      </td></tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td width="50%" style="padding:8px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;">
+                      <tr><td style="padding:16px 18px;">
+                        <div style="font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#b91c1c;margin-bottom:6px;">Overdue</div>
+                        <div style="font-size:22px;font-weight:700;color:#991b1b;">{{ overdue_count }} customer{{ overdue_count|pluralize }}</div>
+                        <div style="font-size:12px;color:#b91c1c;margin-top:2px;">{{ overdue_amount_display }}</div>
+                      </td></tr>
+                    </table>
+                  </td>
+                  <td width="50%" style="padding:8px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:12px;">
+                      <tr><td style="padding:16px 18px;">
+                        <div style="font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#0f766e;margin-bottom:6px;">Total Transactions</div>
+                        <div style="font-size:22px;font-weight:700;color:#0f766e;">{{ tx_count }}</div>
+                      </td></tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Top overdue -->
+          {% if top_overdue_name %}
+          <tr>
+            <td style="padding:8px 32px 0;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fafafa;border-radius:10px;">
+                <tr>
+                  <td style="padding:14px 18px;">
+                    <p style="margin:0;font-size:13px;line-height:1.6;color:#64748b;">
+                      💡 <strong style="color:#334155;">Follow up first:</strong> {{ top_overdue_name }} owes the most —
+                      <strong style="color:#991b1b;">{{ top_overdue_amount_display }}</strong>.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {% endif %}
+
+          <!-- Attachment note -->
+          <tr>
+            <td style="padding:24px 32px 8px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f0fdfa;border:1px dashed #5eead4;border-radius:12px;">
+                <tr>
+                  <td style="padding:16px 18px;" align="center">
+                    <p style="margin:0;font-size:13px;line-height:1.6;color:#0f766e;">
+                      📎 <strong>{{ attachment_name }}</strong> is attached — it includes a Summary &amp; Insights sheet,
+                      every customer ranked by outstanding, and your complete transaction log.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:24px 32px 28px;border-top:1px solid #eef2f5;text-align:center;">
+              <p style="margin:0 0 4px;font-size:13px;font-weight:700;color:#0f766e;letter-spacing:0.4px;">Powered by INWIZY</p>
+              <p style="margin:0;font-size:12px;color:#94a3b8;">Smart Udhar. Stronger Relationships.</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

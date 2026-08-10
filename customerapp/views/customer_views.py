@@ -367,12 +367,13 @@ class HelpView(APIView):
                     {
                         'question': 'Who do I contact for support?',
                         'answer': (
-                            'Email support@easyudhar.com or use Help & support in Profile. '
-                            'You can also chat with your shop directly from Accounts.'
+                            'Chat with us on WhatsApp at +91 89291 69291, or email '
+                            'support@easyudhar.com.'
                         ),
                     },
                 ],
                 'support_email': 'support@easyudhar.com',
+                'support_whatsapp': 'https://wa.me/918929169291',
             }
         )
 

@@ -1,5 +1,7 @@
 
 from django.db.models import Q
+from django.http import JsonResponse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -12,10 +14,12 @@ from customerapp.models import (
     ShopMessage,
 )
 
-from ..models import AccountSuspension
+from ..models import AccountSuspension, AdminUser, CustomerBackup
 from ..permissions import RoleRequired
+from ..services.backups import build_customer_backup_payload, restore_customer_backup
 from ..services.data import (
     customer_account_item,
+    customer_backup_item,
     customer_detail,
     customer_device_item,
     customer_list_item,
@@ -80,13 +84,49 @@ class CustomerExportView(AdminAPIView):
         )
 
 
+def _customer_has_financial_history(customer):
+    return (
+        customer.accounts.exists()
+        or customer.payments.exists()
+        or customer.razorpay_orders.exists()
+    )
+
+
 class CustomerDetailView(AdminAPIView):
+    def get_permissions(self):
+        from ..models import AdminUser
+
+        perms = [perm() for perm in AdminAPIView.permission_classes]
+        if self.request.method == 'DELETE':
+            perms.append(RoleRequired([AdminUser.ROLE_SUPER_ADMIN]))
+        return perms
+
     def get(self, request, pk):
         try:
             customer = Customer.objects.get(pk=pk)
         except Customer.DoesNotExist:
             return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(customer_detail(customer))
+
+    def delete(self, request, pk):
+        try:
+            customer = Customer.objects.get(pk=pk)
+        except Customer.DoesNotExist:
+            return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if _customer_has_financial_history(customer):
+            return Response(
+                {
+                    'detail': (
+                        'This customer has linked shop accounts, payments, or orders. '
+                        'Suspend the account instead of deleting it.'
+                    ),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        name = customer.full_name or customer.username
+        log_audit(request.user, 'customer_delete', 'customer', customer.pk, {'name': name}, request=request)
+        customer.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def patch(self, request, pk):
         try:
@@ -137,6 +177,33 @@ class CustomerDetailView(AdminAPIView):
                 request=request,
             )
         return Response(customer_detail(customer))
+
+
+class CustomerBulkDeleteView(AdminAPIView):
+    def get_permissions(self):
+        from ..models import AdminUser
+
+        return [perm() for perm in AdminAPIView.permission_classes] + [
+            RoleRequired([AdminUser.ROLE_SUPER_ADMIN])
+        ]
+
+    def post(self, request):
+        ids = request.data.get('ids')
+        if not isinstance(ids, list) or not ids:
+            return Response({'detail': 'No customer ids provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        deleted = []
+        blocked = []
+        for customer in Customer.objects.filter(pk__in=ids):
+            name = customer.full_name or customer.username
+            if _customer_has_financial_history(customer):
+                blocked.append({'id': customer.id, 'name': name})
+                continue
+            log_audit(request.user, 'customer_delete', 'customer', customer.pk, {'name': name}, request=request)
+            customer.delete()
+            deleted.append(customer.id)
+
+        return Response({'deleted': deleted, 'blocked': blocked})
 
 
 class CustomerResetPasswordView(AdminAPIView):
@@ -297,3 +364,114 @@ class CustomerDeviceDeleteView(AdminAPIView):
             return Response({'detail': 'Device not found.'}, status=status.HTTP_404_NOT_FOUND)
         log_audit(request.user, 'revoke_device', 'customer', customer.pk, {'token_id': str(token_id)}, request)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CustomerBackupListView(AdminAPIView):
+    def get_permissions(self):
+        perms = [perm() for perm in AdminAPIView.permission_classes]
+        if self.request.method == 'POST':
+            perms.append(RoleRequired([AdminUser.ROLE_SUPPORT, AdminUser.ROLE_SUPER_ADMIN]))
+        return perms
+
+    def get(self, request, pk):
+        try:
+            customer = Customer.objects.get(pk=pk)
+        except Customer.DoesNotExist:
+            return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
+        qs = CustomerBackup.objects.filter(customer=customer).select_related('created_by', 'restored_by')
+        page, paginator = self.paginate(request, qs)
+        data = [customer_backup_item(b) for b in page]
+        return paginator.get_paginated_response(data)
+
+    def post(self, request, pk):
+        try:
+            customer = Customer.objects.get(pk=pk)
+        except Customer.DoesNotExist:
+            return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
+        label = (request.data.get('label') or '').strip()
+        payload = build_customer_backup_payload(customer)
+        backup = CustomerBackup.objects.create(
+            customer=customer,
+            label=label,
+            payload=payload,
+            created_by=request.user,
+        )
+        log_audit(
+            request.user, 'customer_backup_create', 'customer', customer.pk,
+            {'backup_id': backup.id}, request=request,
+        )
+        return Response(customer_backup_item(backup), status=status.HTTP_201_CREATED)
+
+
+def _get_customer_backup(pk, backup_id):
+    customer = Customer.objects.filter(pk=pk).first()
+    if customer is None:
+        return None, None
+    backup = CustomerBackup.objects.filter(pk=backup_id, customer=customer).first()
+    return customer, backup
+
+
+class CustomerBackupDetailView(AdminAPIView):
+    def get_permissions(self):
+        perms = [perm() for perm in AdminAPIView.permission_classes]
+        if self.request.method == 'DELETE':
+            perms.append(RoleRequired([AdminUser.ROLE_SUPER_ADMIN]))
+        return perms
+
+    def get(self, request, pk, backup_id):
+        customer, backup = _get_customer_backup(pk, backup_id)
+        if customer is None:
+            return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if backup is None:
+            return Response({'detail': 'Backup not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(customer_backup_item(backup))
+
+    def delete(self, request, pk, backup_id):
+        customer, backup = _get_customer_backup(pk, backup_id)
+        if customer is None:
+            return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if backup is None:
+            return Response({'detail': 'Backup not found.'}, status=status.HTTP_404_NOT_FOUND)
+        log_audit(
+            request.user, 'customer_backup_delete', 'customer', customer.pk,
+            {'backup_id': backup.id}, request=request,
+        )
+        backup.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CustomerBackupDownloadView(AdminAPIView):
+    def get(self, request, pk, backup_id):
+        customer, backup = _get_customer_backup(pk, backup_id)
+        if customer is None:
+            return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if backup is None:
+            return Response({'detail': 'Backup not found.'}, status=status.HTTP_404_NOT_FOUND)
+        response = JsonResponse(backup.payload, json_dumps_params={'indent': 2})
+        response['Content-Disposition'] = f'attachment; filename="customer-{customer.pk}-backup-{backup.id}.json"'
+        return response
+
+
+class CustomerBackupRestoreView(AdminAPIView):
+    def get_permissions(self):
+        return [perm() for perm in AdminAPIView.permission_classes] + [
+            RoleRequired([AdminUser.ROLE_SUPER_ADMIN])
+        ]
+
+    def post(self, request, pk, backup_id):
+        customer, backup = _get_customer_backup(pk, backup_id)
+        if customer is None:
+            return Response({'detail': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if backup is None:
+            return Response({'detail': 'Backup not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        restore_customer_backup(customer, backup)
+        backup.restored_at = timezone.now()
+        backup.restored_by = request.user
+        backup.save(update_fields=['restored_at', 'restored_by'])
+
+        log_audit(
+            request.user, 'customer_backup_restore', 'customer', customer.pk,
+            {'backup_id': backup.id}, request=request,
+        )
+        return Response(customer_detail(customer))

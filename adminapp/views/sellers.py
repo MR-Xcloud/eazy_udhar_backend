@@ -287,6 +287,8 @@ class SellerSettingsView(AdminAPIView):
             'daily_summary_channels': 'daily_summary_channels',
             'push_enabled': 'push_notifications_enabled',
             'push_notifications_enabled': 'push_notifications_enabled',
+            'eod_excel_backup_enabled': 'eod_excel_backup_enabled',
+            'eod_excel_backup_time': 'eod_excel_backup_time',
             'language': 'language',
         }
         for key, attr in field_map.items():
@@ -295,6 +297,28 @@ class SellerSettingsView(AdminAPIView):
         settings.save()
         log_audit(request.user, 'seller_settings_update', 'seller', seller.pk, request=request)
         return Response(seller_settings_dict(seller))
+
+
+class SellerEodBackupSendView(AdminAPIView):
+    """Manually trigger a seller's own EOD Excel transaction backup email (for support/testing)."""
+
+    def post(self, request, pk):
+        try:
+            seller = Seller.objects.get(pk=pk)
+        except Seller.DoesNotExist:
+            return Response({'detail': 'Seller not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        from sellerapp.eod_excel_report import send_eod_backup_for_seller
+
+        result = send_eod_backup_for_seller(seller, force=True)
+        log_audit(request.user, 'seller_eod_backup_send', 'seller', seller.pk, result, request=request)
+
+        if result.get('sent'):
+            return Response({'detail': f"Backup emailed to {result['to']}.", **result})
+        return Response(
+            {'detail': f"Not sent: {result.get('reason') or result.get('error') or 'unknown error'}.", **result},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 class SellerCustomersView(AdminAPIView):

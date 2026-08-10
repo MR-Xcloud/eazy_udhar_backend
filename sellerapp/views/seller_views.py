@@ -551,14 +551,20 @@ class CallLogView(SellerAPIView):
 
 class SettingsView(SellerAPIView):
     def get(self, request):
+        from ..subscription_service import enforce_reminder_plan_gate
+
         settings, _ = SellerSettings.objects.get_or_create(seller=request.user)
+        enforce_reminder_plan_gate(request.user, settings)
         return Response(SellerSettingsSerializer(settings).data)
 
     def put(self, request):
+        from ..subscription_service import enforce_reminder_plan_gate
+
         settings, _ = SellerSettings.objects.get_or_create(seller=request.user)
         serializer = SellerSettingsSerializer(settings, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        enforce_reminder_plan_gate(request.user, settings)
         return Response(SellerSettingsSerializer(settings).data)
 
 
@@ -577,7 +583,7 @@ class BusinessView(SellerAPIView):
 
 class TeamView(SellerAPIView):
     def get(self, request):
-        members = TeamMember.objects.filter(seller=request.user)
+        members = TeamMember.objects.filter(seller=request.user, is_active=True)
         return Response(
             {'team': TeamMemberSerializer(members, many=True).data}
         )
@@ -656,18 +662,6 @@ class SellerPaymentMethodsView(SellerAPIView):
                         'label': 'My QR',
                         'seller_manual': True,
                         'online': False,
-                    },
-                    {
-                        'id': 'online',
-                        'label': 'UPI / Card / Wallet / Net Banking',
-                        'online': True,
-                        'seller_manual': False,
-                    },
-                    {
-                        'id': 'payment_link',
-                        'label': 'Payment link',
-                        'online': True,
-                        'seller_manual': False,
                     },
                 ],
                 'partial_payment_allowed': True,
@@ -818,4 +812,58 @@ class SellerCustomerPaymentLinksSyncView(SellerAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(payload, status=status.HTTP_200_OK)
+
+
+class HelpView(SellerAPIView):
+    def get(self, request):
+        return Response(
+            {
+                'faq': [
+                    {
+                        'question': 'How do I add a new customer?',
+                        'answer': (
+                            'Tap the + button on Customers, fill in their name and phone '
+                            'number, and save. You can start recording credit right away.'
+                        ),
+                    },
+                    {
+                        'question': 'How do I record a credit sale or a payment?',
+                        'answer': (
+                            'Open a customer, tap Add credit to record a sale on account, '
+                            'or Receive payment to log money collected.'
+                        ),
+                    },
+                    {
+                        'question': 'How do I remind a customer about their dues?',
+                        'answer': (
+                            'Open a customer and tap Remind to send an SMS or WhatsApp '
+                            'reminder. Reminders use your monthly message quota.'
+                        ),
+                    },
+                    {
+                        'question': 'How do I download or share a customer statement?',
+                        'answer': (
+                            'Open a customer, go to Statement, and share or download '
+                            'the PDF from there.'
+                        ),
+                    },
+                    {
+                        'question': 'How do payment links and QR payments work?',
+                        'answer': (
+                            'From a customer, tap Payment link to create a Razorpay link '
+                            'or QR code they can pay with UPI or card directly.'
+                        ),
+                    },
+                    {
+                        'question': 'Who do I contact for support?',
+                        'answer': (
+                            'Chat with us on WhatsApp at +91 89291 69291, or email '
+                            'support@easyudhar.com.'
+                        ),
+                    },
+                ],
+                'support_email': 'support@easyudhar.com',
+                'support_whatsapp': 'https://wa.me/918929169291',
+            }
+        )
 

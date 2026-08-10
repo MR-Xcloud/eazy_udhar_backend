@@ -16,6 +16,12 @@ python-dotenv==1.1.0
 # Image uploads (sellerapp credit_given / bill_image fields)
 Pillow==12.2.0
 
+# Invoice PDF generation (adminapp subscription invoices)
+reportlab==5.0.0
+
+# Excel export (seller EOD transaction backup report)
+openpyxl==3.1.5
+
 # Production WSGI server
 gunicorn==23.0.0
 

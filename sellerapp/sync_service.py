@@ -146,6 +146,9 @@ def create_customer_idempotent(
     phone='',
     email='',
     address='',
+    flat_number='',
+    tower='',
+    society='',
     city='',
     state='',
     country='India',
@@ -174,7 +177,7 @@ def create_customer_idempotent(
         by_phone = find_customer_by_phone(seller, phone)
         return by_phone, True
 
-    customer = SellerCustomer.objects.create(
+    customer = SellerCustomer(
         seller=seller,
         client_id=client_uuid,
         device_created_at=device_at,
@@ -182,10 +185,15 @@ def create_customer_idempotent(
         phone=phone,
         email=email or '',
         address=address or '',
+        flat_number=flat_number or '',
+        tower=tower or '',
+        society=society or '',
         city=city or '',
         state=state or '',
         country=country or 'India',
     )
+    customer.sync_composed_address()
+    customer.save()
     if notify:
         link_seller_customer(customer)
         notify_customer_added_by_seller(customer, seller)
@@ -429,6 +437,9 @@ def _process_operation(seller, op, payload, client_id, id_map):
             phone=payload.get('phone', ''),
             email=payload.get('email', ''),
             address=payload.get('address', ''),
+            flat_number=payload.get('flat_number', ''),
+            tower=payload.get('tower', ''),
+            society=payload.get('society', ''),
             city=payload.get('city', ''),
             state=payload.get('state', ''),
             country=payload.get('country', 'India'),

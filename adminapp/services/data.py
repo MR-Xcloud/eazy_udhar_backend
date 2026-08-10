@@ -23,6 +23,7 @@ from sellerapp.models import (
 )
 
 from adminapp.models import SellerSubscription
+from sellerapp.subscription_service import message_quota_dict
 
 
 def _seller_status(seller):
@@ -48,6 +49,7 @@ def seller_list_item(seller):
         customers_count=Count('id'),
         outstanding_total=Sum('outstanding_amount'),
     )
+    quota = message_quota_dict(seller)
     return {
         'id': seller.id,
         'business_name': seller.business_name,
@@ -59,6 +61,10 @@ def seller_list_item(seller):
         'outstanding_total': float(agg['outstanding_total'] or 0),
         'status': _seller_status(seller),
         'subscription_status': seller_subscription_status(seller),
+        'messages_used': quota['messages_used'],
+        'message_limit': quota['message_limit'],
+        'messages_remaining': quota['messages_remaining'],
+        'sms_pack_balance': quota['sms_pack_balance'],
         'created_at': seller.created_at.isoformat(),
         'last_login_at': seller.last_login.isoformat() if seller.last_login else None,
         **_seller_payout_fields(seller),
@@ -121,6 +127,8 @@ def seller_settings_dict(seller):
         'daily_summary_channels': settings.daily_summary_channels or [],
         'push_enabled': settings.push_notifications_enabled,
         'push_notifications_enabled': settings.push_notifications_enabled,
+        'eod_excel_backup_enabled': settings.eod_excel_backup_enabled,
+        'eod_excel_backup_time': settings.eod_excel_backup_time,
         'language': settings.language,
     }
 
@@ -235,7 +243,7 @@ def team_member_item(member):
         'email': '',
         'phone': member.phone,
         'role': member.role if member.role in ('owner', 'staff') else 'staff',
-        'status': 'active',
+        'status': 'active' if member.is_active else 'inactive',
         'created_at': member.created_at.isoformat(),
     }
 
@@ -447,6 +455,21 @@ def customer_device_item(dt):
         last_active=dt.updated_at.isoformat(),
         created_at=dt.created_at.isoformat(),
     )
+
+
+def customer_backup_item(backup):
+    from adminapp.services.backups import backup_summary
+
+    return {
+        'id': backup.id,
+        'customer_id': backup.customer_id,
+        'label': backup.label,
+        'summary': backup_summary(backup.payload),
+        'created_by': backup.created_by.full_name if backup.created_by_id else None,
+        'created_at': backup.created_at.isoformat(),
+        'restored_by': backup.restored_by.full_name if backup.restored_by_id else None,
+        'restored_at': backup.restored_at.isoformat() if backup.restored_at else None,
+    }
 
 
 def shop_message_item(msg):

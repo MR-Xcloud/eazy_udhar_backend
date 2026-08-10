@@ -72,6 +72,9 @@ class SellerCustomer(models.Model):
     phone = models.CharField(max_length=20)
     email = models.EmailField(blank=True)
     address = models.TextField(blank=True)
+    flat_number = models.CharField(max_length=100, blank=True)
+    tower = models.CharField(max_length=100, blank=True)
+    society = models.CharField(max_length=200, blank=True)
     city = models.CharField(max_length=100, blank=True)
     state = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100, blank=True, default='India')
@@ -127,6 +130,20 @@ class SellerCustomer(models.Model):
     @property
     def advance_balance(self):
         return self.advance_deposited - self.advance_used
+
+    def composed_address(self):
+        parts = [
+            (self.flat_number or '').strip(),
+            (self.tower or '').strip(),
+            (self.society or '').strip(),
+        ]
+        composed = ', '.join(p for p in parts if p)
+        return composed or (self.address or '').strip()
+
+    def sync_composed_address(self):
+        composed = self.composed_address()
+        if composed and composed != (self.address or '').strip():
+            self.address = composed
 
 
 class LedgerTransaction(models.Model):
@@ -288,9 +305,19 @@ class SellerSettings(models.Model):
     daily_summary_enabled = models.BooleanField(default=True)
     daily_summary_time = models.CharField(max_length=5, default='21:00')
     daily_summary_channels = models.JSONField(default=list)
+    eod_excel_backup_enabled = models.BooleanField(
+        default=True,
+        help_text='Email an end-of-day Excel backup of all ledger transactions to the seller.',
+    )
+    eod_excel_backup_time = models.CharField(max_length=5, default='22:00')
     sms_pack_balance = models.PositiveIntegerField(
         default=0,
         help_text='Prepaid SMS credits purchased via SMS packs (top-up).',
+    )
+    excel_report_addon_expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='On-demand Excel report export addon access expires at this time.',
     )
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -312,6 +339,7 @@ class TeamMember(models.Model):
     name = models.CharField(max_length=100)
     phone = models.CharField(max_length=20, blank=True)
     role = models.CharField(max_length=50, default='staff')
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -586,6 +614,42 @@ class SellerPaymentLinkPayment(models.Model):
 
     def __str__(self):
         return f'{self.razorpay_payment_id} — Rs.{self.amount}'
+
+
+class SellerExcelReportOrder(models.Model):
+    """Time-limited Excel report addon checkout — settles to EazyUdhar merchant account."""
+
+    STATUS_PENDING = 'pending'
+    STATUS_PAID = 'paid'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    seller = models.ForeignKey(
+        Seller, on_delete=models.CASCADE, related_name='excel_report_orders'
+    )
+    plan_slug = models.CharField(max_length=100)
+    plan_name = models.CharField(max_length=120)
+    duration_days = models.PositiveIntegerField()
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default='INR')
+    reference_id = models.CharField(max_length=100, unique=True)
+    razorpay_order_id = models.CharField(max_length=100, unique=True, db_index=True)
+    razorpay_payment_id = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.reference_id} — {self.plan_name} ({self.status})'
 
 
 class SellerDeviceToken(models.Model):

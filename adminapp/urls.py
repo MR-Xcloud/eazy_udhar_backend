@@ -7,9 +7,15 @@ from .views.auth import (
     AdminTokenRefreshView,
 )
 from .views.comms import OTPRecordListView, ReminderLogListView, ReminderLogResendView
+from .views.telegram import TelegramConversationListView, TelegramMessageListView, TelegramMessageReplyView
 from .views.customers import (
     CustomerAccountDeleteView,
     CustomerAccountsView,
+    CustomerBackupDetailView,
+    CustomerBackupDownloadView,
+    CustomerBackupListView,
+    CustomerBackupRestoreView,
+    CustomerBulkDeleteView,
     CustomerDetailView,
     CustomerDeviceDeleteView,
     CustomerDevicesView,
@@ -61,6 +67,7 @@ from .views.sellers import (
     SellerDetailView,
     SellerDeviceDeleteView,
     SellerDevicesView,
+    SellerEodBackupSendView,
     SellerExportView,
     SellerInviteView,
     SellerListView,
@@ -79,8 +86,10 @@ from .views.shops import (
     SellerCustomersGlobalListView,
 )
 from .views.subscriptions import (
+    InvoiceDetailView,
     InvoiceDownloadView,
     InvoiceListView,
+    InvoiceSendEmailView,
     PaymentListView,
     PaymentRefundView,
     SubscriptionCancelView,
@@ -102,7 +111,7 @@ from .views.system import (
     CronJobTriggerView,
     SystemHealthView,
 )
-from .views.team import TeamMembersListView
+from .views.team import TeamMemberUpdateView, TeamMembersListView
 from .views.payments import (
     AdminPaymentMethodsView,
     AdminRazorpayConfigView,
@@ -146,14 +155,17 @@ urlpatterns = [
     path('sellers/<int:pk>/suspend', SellerSuspendView.as_view(), name='admin-seller-suspend'),
     path('sellers/<int:pk>/unsuspend', SellerUnsuspendView.as_view(), name='admin-seller-unsuspend'),
     path('sellers/<int:pk>/settings', SellerSettingsView.as_view(), name='admin-seller-settings'),
+    path('sellers/<int:pk>/eod-backup/send', SellerEodBackupSendView.as_view(), name='admin-seller-eod-backup-send'),
     path('sellers/<int:pk>/customers', SellerCustomersView.as_view(), name='admin-seller-customers'),
     path('sellers/<int:pk>/customers/export', SellerCustomersExportView.as_view(), name='admin-seller-customers-export'),
     path('sellers/<int:pk>/team', SellerTeamView.as_view(), name='admin-seller-team'),
+    path('sellers/<int:pk>/team/<uuid:member_id>', TeamMemberUpdateView.as_view(), name='admin-seller-team-member-update'),
     path('sellers/<int:pk>/notifications', SellerNotificationsView.as_view(), name='admin-seller-notifications'),
     path('sellers/<int:pk>/devices', SellerDevicesView.as_view(), name='admin-seller-devices'),
     path('sellers/<int:pk>/devices/<uuid:token_id>', SellerDeviceDeleteView.as_view(), name='admin-seller-device-delete'),
     # Customers (static paths before <int:pk> patterns)
     path('customers/export', CustomerExportView.as_view(), name='admin-customers-export'),
+    path('customers/bulk-delete', CustomerBulkDeleteView.as_view(), name='admin-customers-bulk-delete'),
     path('customers', CustomerListView.as_view(), name='admin-customers'),
     path('customers/<int:pk>', CustomerDetailView.as_view(), name='admin-customer-detail'),
     path('customers/<int:pk>/reset-password', CustomerResetPasswordView.as_view(), name='admin-customer-reset-password'),
@@ -166,6 +178,10 @@ urlpatterns = [
     path('customers/<int:pk>/messages', CustomerMessagesView.as_view(), name='admin-customer-messages'),
     path('customers/<int:pk>/devices', CustomerDevicesView.as_view(), name='admin-customer-devices'),
     path('customers/<int:pk>/devices/<uuid:token_id>', CustomerDeviceDeleteView.as_view(), name='admin-customer-device-delete'),
+    path('customers/<int:pk>/backups', CustomerBackupListView.as_view(), name='admin-customer-backups'),
+    path('customers/<int:pk>/backups/<int:backup_id>', CustomerBackupDetailView.as_view(), name='admin-customer-backup-detail'),
+    path('customers/<int:pk>/backups/<int:backup_id>/download', CustomerBackupDownloadView.as_view(), name='admin-customer-backup-download'),
+    path('customers/<int:pk>/backups/<int:backup_id>/restore', CustomerBackupRestoreView.as_view(), name='admin-customer-backup-restore'),
     # Team
     path('team-members', TeamMembersListView.as_view(), name='admin-team-members'),
     # Subscriptions (static paths before <int:pk> patterns)
@@ -175,7 +191,9 @@ urlpatterns = [
     path('sms-packs/orders', SmsPackOrderListView.as_view(), name='admin-sms-pack-orders'),
     path('sms-packs/<int:pk>', SmsPackDetailView.as_view(), name='admin-sms-pack-detail'),
     path('subscriptions/invoices', InvoiceListView.as_view(), name='admin-subscription-invoices'),
+    path('subscriptions/invoices/<int:pk>', InvoiceDetailView.as_view(), name='admin-subscription-invoice-detail'),
     path('subscriptions/invoices/<int:pk>/download', InvoiceDownloadView.as_view(), name='admin-subscription-invoice-download'),
+    path('subscriptions/invoices/<int:pk>/send-email', InvoiceSendEmailView.as_view(), name='admin-subscription-invoice-send-email'),
     path('subscriptions', SubscriptionListView.as_view(), name='admin-subscriptions'),
     path('subscriptions/<int:pk>/cancel', SubscriptionCancelView.as_view(), name='admin-subscription-cancel'),
     path('subscriptions/<int:pk>', SubscriptionPatchView.as_view(), name='admin-subscription-patch'),
@@ -200,6 +218,9 @@ urlpatterns = [
     path('reminder-logs', ReminderLogListView.as_view(), name='admin-reminder-logs'),
     path('reminder-logs/<uuid:pk>/resend', ReminderLogResendView.as_view(), name='admin-reminder-resend'),
     path('otp-records', OTPRecordListView.as_view(), name='admin-otp-records'),
+    path('telegram-messages/reply', TelegramMessageReplyView.as_view(), name='admin-telegram-messages-reply'),
+    path('telegram-messages', TelegramMessageListView.as_view(), name='admin-telegram-messages'),
+    path('telegram-conversations', TelegramConversationListView.as_view(), name='admin-telegram-conversations'),
     # Promos
     path('promo-codes', PromoCodeListView.as_view(), name='admin-promo-codes'),
     path('promo-codes/<int:pk>', PromoCodeDetailView.as_view(), name='admin-promo-code-detail'),

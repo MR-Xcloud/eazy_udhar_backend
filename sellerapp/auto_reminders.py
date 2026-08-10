@@ -2,6 +2,7 @@ from django.utils import timezone
 
 from .models import ReminderLog, Seller, SellerSettings
 from .reminders import customers_for_auto_remind, send_customer_reminder
+from .subscription_service import seller_reminder_type
 
 
 def _parse_hhmm(value):
@@ -26,6 +27,9 @@ def run_auto_reminders(*, force=False):
         if not settings.auto_remind_enabled and not force:
             continue
         if not force and not is_auto_remind_due_now(settings):
+            continue
+        # Automated reminders are a Business-tier feature; lower plans (₹29-₹299) are on_demand only.
+        if seller_reminder_type(seller) != 'automated':
             continue
 
         channels = [c.lower() for c in (settings.reminder_channels or ['sms'])]

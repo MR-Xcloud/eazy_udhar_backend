@@ -97,6 +97,22 @@ def get_current_subscription(seller):
     return _expire_if_needed(sub)
 
 
+def seller_reminder_type(seller):
+    """'automated' or 'on_demand', per the seller's current plan features."""
+    sub = get_current_subscription(seller)
+    if sub is None:
+        return 'on_demand'
+    return _plan_features(sub.plan).get('reminder_type', 'on_demand')
+
+
+def enforce_reminder_plan_gate(seller, settings):
+    """Force auto_remind_enabled off (and persist it) if the seller's plan is on_demand-only."""
+    if settings.auto_remind_enabled and seller_reminder_type(seller) != 'automated':
+        settings.auto_remind_enabled = False
+        settings.save(update_fields=['auto_remind_enabled'])
+    return settings
+
+
 def _subscription_period_bounds(sub):
     if sub is None:
         return None, None

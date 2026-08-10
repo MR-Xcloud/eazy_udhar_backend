@@ -250,6 +250,7 @@ OTP_EMAIL_LOGO_URL = env('OTP_EMAIL_LOGO_URL')
 # ── Telegram support bot ───────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = env('TELEGRAM_BOT_TOKEN')
 TELEGRAM_BOT_USERNAME = env('TELEGRAM_BOT_USERNAME')  # without @, e.g. EazyUdharSupportBot
+TELEGRAM_WEBHOOK_SECRET = env('TELEGRAM_WEBHOOK_SECRET')  # random path segment, verifies inbound updates
 SUPPORT_EMAIL = env('SUPPORT_EMAIL', 'support@eazyudhar.com')
 
 # ── WhatsApp (optional) ────────────────────────────────────────────────────────

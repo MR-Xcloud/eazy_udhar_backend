@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.conf import settings
 from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.utils import timezone
@@ -13,7 +14,19 @@ from ..models import (
     SubscriptionPlan,
 )
 from ..permissions import RoleRequired
+from ..services.download_tokens import make_invoice_download_token, verify_invoice_download_token
+from ..services.gst import determine_tax_type
+from ..services.invoice_pdf import (
+    COMPANY_BANK_ACCOUNT_NO,
+    COMPANY_BANK_NAME,
+    COMPANY_EMAIL,
+    COMPANY_NAME,
+    ensure_invoice_pdf,
+    tax_line_items,
+)
 from ..utils import log_audit
+
+ADMIN_API_BASE = f"{(getattr(settings, 'PUBLIC_STATEMENT_BASE_URL', '') or '').rstrip('/')}/admin-api/v1"
 from .base import AdminAPIView
 
 
@@ -36,6 +49,7 @@ def _subscription_item(sub):
 
 def _plan_item(plan):
     features = plan.features
+    message_limit = int(features.get('message_limit', 0)) if isinstance(features, dict) else 0
     if isinstance(features, dict):
         features = features.get('items', []) or list(features.values())
     return {
@@ -45,6 +59,7 @@ def _plan_item(plan):
         'price_monthly': float(plan.price_monthly),
         'price_yearly': float(plan.price_yearly),
         'trial_days': plan.trial_days,
+        'message_limit': message_limit,
         'features': features if isinstance(features, list) else [],
         'is_active': plan.is_active,
         'sort_order': plan.sort_order,
@@ -66,20 +81,51 @@ def _payment_item(payment):
     }
 
 
-def _invoice_item(invoice):
-    return {
+def _invoice_item(invoice, detailed=False):
+    item = {
         'id': invoice.id,
         'subscription_id': invoice.subscription_id,
         'seller_id': invoice.seller_id,
+        'seller_name': invoice.seller.business_name,
         'invoice_number': invoice.invoice_number,
         'amount': float(invoice.amount),
         'tax_amount': float(invoice.tax_amount),
+        'tax_type': invoice.tax_type,
+        'total_amount': float(invoice.amount + invoice.tax_amount),
+        'currency': invoice.subscription.currency,
         'status': invoice.status,
+        'payment_method': invoice.payment_method,
+        'offline_reference': invoice.offline_reference or None,
+        'notes': invoice.notes or None,
+        'recorded_by': invoice.recorded_by.full_name if invoice.recorded_by_id else None,
+        'paid_at': invoice.paid_at.isoformat() if invoice.paid_at else None,
         'period_start': invoice.period_start.isoformat(),
         'period_end': invoice.period_end.isoformat(),
         'pdf_url': invoice.pdf_url or None,
+        'seller_email': invoice.seller.email if getattr(invoice, 'seller', None) else None,
+        'emailed_at': invoice.emailed_at.isoformat() if getattr(invoice, 'emailed_at', None) else None,
+        'download_url': (
+            f'{ADMIN_API_BASE}/subscriptions/invoices/{invoice.id}/download'
+            f'?token={make_invoice_download_token(invoice.id)}'
+        ),
         'created_at': invoice.created_at.isoformat(),
     }
+    if detailed:
+        item.update({
+            'plan_name': invoice.subscription.plan.name,
+            'seller_email': invoice.seller.email,
+            'seller_phone': invoice.seller.phone,
+            'seller_gst_number': invoice.seller.gst_number or None,
+        })
+    return item
+
+
+def _next_invoice_number():
+    """INV-YYYYMM-#### sequential within the month, e.g. INV-202607-0001."""
+    now = timezone.now()
+    prefix = f'INV-{now:%Y%m}-'
+    count = SubscriptionInvoice.objects.filter(invoice_number__startswith=prefix).count()
+    return f'{prefix}{count + 1:04d}'
 
 
 class SubscriptionListView(AdminAPIView):
@@ -149,13 +195,21 @@ class SubscriptionPlanListView(AdminAPIView):
         slug = (request.data.get('slug') or '').strip()
         if not name or not slug:
             return Response({'detail': 'Name and slug are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        features = request.data.get('features', {})
+        if not isinstance(features, dict):
+            features = {}
+        if 'message_limit' in request.data:
+            try:
+                features['message_limit'] = int(request.data.get('message_limit') or 0)
+            except (TypeError, ValueError):
+                features['message_limit'] = 0
         plan = SubscriptionPlan.objects.create(
             name=name,
             slug=slug,
             price_monthly=request.data.get('price_monthly', 0),
             price_yearly=request.data.get('price_yearly', 0),
             trial_days=request.data.get('trial_days', 0),
-            features=request.data.get('features', {}),
+            features=features,
             is_active=request.data.get('is_active', True),
             sort_order=request.data.get('sort_order', 0),
         )
@@ -179,6 +233,13 @@ class SubscriptionPlanDetailView(AdminAPIView):
         for field in ('name', 'slug', 'price_monthly', 'price_yearly', 'trial_days', 'features', 'is_active', 'sort_order'):
             if field in request.data:
                 setattr(plan, field, request.data[field])
+        if 'message_limit' in request.data:
+            features = plan.features if isinstance(plan.features, dict) else {}
+            try:
+                features['message_limit'] = int(request.data.get('message_limit') or 0)
+            except (TypeError, ValueError):
+                pass
+            plan.features = features
         plan.save()
         log_audit(request.user, 'plan_update', 'plan', plan.pk, request=request)
         return Response(_plan_item(plan))
@@ -313,20 +374,162 @@ class PaymentRefundView(AdminAPIView):
 class InvoiceListView(AdminAPIView):
     def get(self, request):
         qs = SubscriptionInvoice.objects.select_related('subscription', 'seller').order_by('-created_at')
+        seller_id = request.query_params.get('seller_id')
+        if seller_id:
+            qs = qs.filter(seller_id=seller_id)
+        payment_method = request.query_params.get('payment_method')
+        if payment_method:
+            qs = qs.filter(payment_method=payment_method)
         page, paginator = self.paginate(request, qs)
         data = [_invoice_item(inv) for inv in page]
         return paginator.get_paginated_response(data)
 
+    def get_permissions(self):
+        from ..models import AdminUser
 
-class InvoiceDownloadView(AdminAPIView):
+        perms = [perm() for perm in AdminAPIView.permission_classes]
+        if self.request.method == 'POST':
+            perms.append(RoleRequired([AdminUser.ROLE_FINANCE, AdminUser.ROLE_SUPER_ADMIN]))
+        return perms
+
+    def post(self, request):
+        """Manually record an invoice — used for offline payments (cash/UPI/bank
+        transfer) from sellers who don't pay through Razorpay."""
+        subscription_id = request.data.get('subscription_id')
+        try:
+            sub = SellerSubscription.objects.select_related('seller').get(pk=subscription_id)
+        except (SellerSubscription.DoesNotExist, TypeError, ValueError):
+            return Response({'detail': 'Subscription not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        payment_method = request.data.get('payment_method', SubscriptionInvoice.PAYMENT_METHOD_OFFLINE)
+        if payment_method not in dict(SubscriptionInvoice.PAYMENT_METHOD_CHOICES):
+            return Response({'detail': 'Invalid payment_method.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            amount = request.data.get('amount', sub.billing_amount)
+            tax_amount = request.data.get('tax_amount', 0)
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid amount.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_offline = payment_method == SubscriptionInvoice.PAYMENT_METHOD_OFFLINE
+        if is_offline and not (request.data.get('offline_reference') or '').strip():
+            return Response(
+                {'detail': 'offline_reference is required to record an offline payment.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        now = timezone.now()
+        invoice = SubscriptionInvoice.objects.create(
+            subscription=sub,
+            seller=sub.seller,
+            invoice_number=_next_invoice_number(),
+            amount=amount,
+            tax_amount=tax_amount,
+            tax_type=determine_tax_type(sub.seller.gst_number),
+            status=SubscriptionInvoice.STATUS_PAID if is_offline else SubscriptionInvoice.STATUS_DRAFT,
+            payment_method=payment_method,
+            offline_reference=(request.data.get('offline_reference') or '').strip(),
+            notes=(request.data.get('notes') or '').strip(),
+            recorded_by=request.user,
+            paid_at=now if is_offline else None,
+            period_start=sub.current_period_start,
+            period_end=sub.current_period_end,
+        )
+        log_audit(
+            request.user,
+            'invoice_record_offline' if is_offline else 'invoice_create',
+            'invoice',
+            invoice.pk,
+            {'payment_method': payment_method, 'amount': str(amount)},
+            request,
+        )
+        ensure_invoice_pdf(invoice)
+        return Response(_invoice_item(invoice, detailed=True), status=status.HTTP_201_CREATED)
+
+
+class InvoiceDetailView(AdminAPIView):
     def get(self, request, pk):
         try:
-            invoice = SubscriptionInvoice.objects.get(pk=pk)
+            invoice = SubscriptionInvoice.objects.select_related(
+                'subscription__plan', 'seller'
+            ).get(pk=pk)
         except SubscriptionInvoice.DoesNotExist:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
-        if invoice.pdf_url:
-            return HttpResponseRedirect(invoice.pdf_url)
-        return Response(
-            {'detail': 'PDF not available for this invoice.'},
-            status=status.HTTP_404_NOT_FOUND,
+        return Response(_invoice_item(invoice, detailed=True))
+
+
+class InvoiceSendEmailView(AdminAPIView):
+    def post(self, request, pk):
+        try:
+            invoice = SubscriptionInvoice.objects.select_related(
+                'subscription__plan', 'seller'
+            ).get(pk=pk)
+        except SubscriptionInvoice.DoesNotExist:
+            return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        from customerapp.email_otp import send_invoice_email
+
+        seller = invoice.seller
+        if not seller.email:
+            return Response({'detail': 'This seller has no email on file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        sub = invoice.subscription
+        # Permanent, unauthenticated /media/ link — unlike the signed
+        # download_url used in the admin panel, an emailed link needs to keep
+        # working whenever the recipient eventually opens the email.
+        download_url = ensure_invoice_pdf(invoice)
+        result = send_invoice_email(
+            to_email=seller.email,
+            business_name=seller.business_name,
+            invoice_number=invoice.invoice_number,
+            amount=invoice.amount,
+            tax_lines=tax_line_items(invoice),
+            total_amount=invoice.amount + invoice.tax_amount,
+            status_label=invoice.get_status_display(),
+            plan_name=sub.plan.name,
+            period_start=invoice.period_start.strftime('%d %b %Y'),
+            period_end=invoice.period_end.strftime('%d %b %Y'),
+            payment_method_label=invoice.get_payment_method_display(),
+            offline_reference=invoice.offline_reference or None,
+            download_url=download_url,
+            bank_name=COMPANY_BANK_NAME,
+            bank_account_no=COMPANY_BANK_ACCOUNT_NO,
+            support_email=COMPANY_EMAIL,
+            company_name=COMPANY_NAME,
         )
+        if not result['sent']:
+            return Response({'detail': result.get('error') or 'Could not send email.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        invoice.emailed_at = timezone.now()
+        invoice.save(update_fields=['emailed_at'])
+        log_audit(request.user, 'invoice_email_sent', 'invoice', invoice.pk, {'to': seller.email}, request)
+        return Response({
+            'detail': f'Invoice emailed to {seller.email}.',
+            'to': seller.email,
+            'emailed_at': invoice.emailed_at.isoformat(),
+        })
+
+
+class InvoiceDownloadView(AdminAPIView):
+    """Plain browser navigation (clicking a link / opening a new tab) can't
+    attach the Authorization: Bearer header the rest of the admin API needs,
+    so this endpoint also accepts a signed, time-limited `?token=` — see
+    `download_url` on the invoice item, which is the one admin-panel links
+    should use. The bare header-based auth still works too, for programmatic
+    callers."""
+
+    def get_permissions(self):
+        token = self.request.query_params.get('token')
+        if verify_invoice_download_token(token, self.kwargs.get('pk')):
+            return []
+        return [perm() for perm in AdminAPIView.permission_classes]
+
+    def get(self, request, pk):
+        try:
+            invoice = SubscriptionInvoice.objects.select_related(
+                'subscription__plan', 'seller'
+            ).get(pk=pk)
+        except SubscriptionInvoice.DoesNotExist:
+            return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+        url = ensure_invoice_pdf(invoice)
+        return HttpResponseRedirect(url)

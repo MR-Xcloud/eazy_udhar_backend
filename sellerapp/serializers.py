@@ -166,10 +166,24 @@ class SellerOTPVerifySerializer(serializers.Serializer):
 class SellerCustomerCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = SellerCustomer
-        fields = ['name', 'phone', 'email', 'address', 'city', 'state', 'country']
+        fields = [
+            'name',
+            'phone',
+            'email',
+            'address',
+            'flat_number',
+            'tower',
+            'society',
+            'city',
+            'state',
+            'country',
+        ]
         extra_kwargs = {
             'email': {'required': False, 'allow_blank': True},
             'address': {'required': False, 'allow_blank': True},
+            'flat_number': {'required': False, 'allow_blank': True},
+            'tower': {'required': False, 'allow_blank': True},
+            'society': {'required': False, 'allow_blank': True},
             'city': {'required': False, 'allow_blank': True},
             'state': {'required': False, 'allow_blank': True},
             'country': {'required': False, 'allow_blank': True},
@@ -188,7 +202,9 @@ class SellerCustomerCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         seller = self.context['seller']
-        customer = SellerCustomer.objects.create(seller=seller, **validated_data)
+        customer = SellerCustomer(seller=seller, **validated_data)
+        customer.sync_composed_address()
+        customer.save()
         from customerapp.messaging import (
             link_seller_customer,
             notify_customer_added_by_seller,
@@ -202,7 +218,32 @@ class SellerCustomerCreateSerializer(serializers.ModelSerializer):
 class SellerCustomerUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = SellerCustomer
-        fields = ['name', 'phone', 'email', 'address', 'city', 'state', 'country', 'status']
+        fields = [
+            'name',
+            'phone',
+            'email',
+            'address',
+            'flat_number',
+            'tower',
+            'society',
+            'city',
+            'state',
+            'country',
+            'status',
+        ]
+        extra_kwargs = {
+            'name': {'required': False},
+            'phone': {'required': False},
+            'email': {'required': False, 'allow_blank': True},
+            'address': {'required': False, 'allow_blank': True},
+            'flat_number': {'required': False, 'allow_blank': True},
+            'tower': {'required': False, 'allow_blank': True},
+            'society': {'required': False, 'allow_blank': True},
+            'city': {'required': False, 'allow_blank': True},
+            'state': {'required': False, 'allow_blank': True},
+            'country': {'required': False, 'allow_blank': True},
+            'status': {'required': False},
+        }
 
     def validate_phone(self, value):
         phone = (value or '').strip()
@@ -215,6 +256,13 @@ class SellerCustomerUpdateSerializer(serializers.ModelSerializer):
                 'A customer with this phone number already exists.'
             )
         return phone
+
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.sync_composed_address()
+        instance.save()
+        return instance
 
 
 class ClientIdMixin(serializers.Serializer):
@@ -261,6 +309,9 @@ class SyncOperationSerializer(serializers.Serializer):
         'phone',
         'email',
         'address',
+        'flat_number',
+        'tower',
+        'society',
         'city',
         'state',
         'country',

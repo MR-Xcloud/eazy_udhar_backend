@@ -7,6 +7,7 @@ from .models import (
     AdminUser,
     AuditLog,
     CronJobStatus,
+    CustomerBackup,
     LegalDocument,
     PromoCode,
     PromoRedemption,
@@ -17,6 +18,8 @@ from .models import (
     SmsPack,
     SupportTicket,
     SyncQueueItem,
+    TelegramChatLink,
+    TelegramMessage,
     TicketReply,
 )
 
@@ -111,14 +114,18 @@ class SubscriptionInvoiceAdmin(admin.ModelAdmin):
         'subscription',
         'amount',
         'tax_amount',
+        'tax_type',
         'status',
+        'payment_method',
+        'offline_reference',
+        'paid_at',
         'period_start',
         'period_end',
         'created_at',
     )
-    list_filter = ('status',)
-    search_fields = ('invoice_number', 'seller__business_name', 'seller__email')
-    list_select_related = ('seller', 'subscription')
+    list_filter = ('status', 'payment_method', 'tax_type')
+    search_fields = ('invoice_number', 'seller__business_name', 'seller__email', 'offline_reference')
+    list_select_related = ('seller', 'subscription', 'recorded_by')
     readonly_fields = ('created_at',)
 
 
@@ -248,6 +255,21 @@ class LegalDocumentAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at')
 
 
+@admin.register(CustomerBackup)
+class CustomerBackupAdmin(admin.ModelAdmin):
+    list_display = (
+        'customer',
+        'label',
+        'created_by',
+        'created_at',
+        'restored_by',
+        'restored_at',
+    )
+    search_fields = ('label', 'customer__email', 'customer__full_name')
+    list_select_related = ('customer', 'created_by', 'restored_by')
+    readonly_fields = ('payload', 'created_at')
+
+
 @admin.register(CronJobStatus)
 class CronJobStatusAdmin(admin.ModelAdmin):
     list_display = (
@@ -260,3 +282,25 @@ class CronJobStatusAdmin(admin.ModelAdmin):
     )
     list_filter = ('last_status',)
     search_fields = ('name', 'schedule', 'last_error')
+
+
+@admin.register(TelegramMessage)
+class TelegramMessageAdmin(admin.ModelAdmin):
+    list_display = ('chat_id', 'direction', 'username', 'first_name', 'text', 'created_at')
+    list_filter = ('direction',)
+    search_fields = ('username', 'first_name', 'last_name', 'text', 'chat_id')
+    readonly_fields = ('chat_id', 'telegram_user_id', 'username', 'first_name', 'last_name', 'text', 'direction', 'sent_by', 'raw_update', 'created_at')
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(TelegramChatLink)
+class TelegramChatLinkAdmin(admin.ModelAdmin):
+    list_display = ('chat_id', 'seller', 'linked_at')
+    search_fields = ('chat_id', 'seller__business_name', 'seller__phone', 'seller__email')
+    list_select_related = ('seller',)
+    readonly_fields = ('chat_id', 'seller', 'linked_at')
+
+    def has_add_permission(self, request):
+        return False

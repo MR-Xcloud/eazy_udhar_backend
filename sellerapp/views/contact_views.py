@@ -5,6 +5,8 @@ import os
 from django.conf import settings
 from rest_framework.response import Response
 
+from easyudhar.telegram_link import make_start_payload
+
 from .seller_views import SellerAPIView
 
 
@@ -67,7 +69,7 @@ SELLER_FAQ = [
 ]
 
 
-def _telegram_payload():
+def _telegram_payload(seller):
     # Prefer live env so .env updates apply after process restart / reload.
     raw = (
         os.environ.get('TELEGRAM_BOT_USERNAME')
@@ -80,7 +82,8 @@ def _telegram_payload():
         or getattr(settings, 'TELEGRAM_BOT_TOKEN', '')
         or ''
     ).strip()
-    chat_url = f'https://t.me/{username}' if username else ''
+    # /start payload lets the webhook link the resulting chat back to this seller.
+    chat_url = f'https://t.me/{username}?start={make_start_payload(seller.id)}' if username else ''
     return {
         'enabled': bool(username),
         'username': username,
@@ -102,6 +105,6 @@ class SellerContactUsView(SellerAPIView):
                     or 'support@eazyudhar.com'
                 ),
                 'faq': SELLER_FAQ,
-                'telegram': _telegram_payload(),
+                'telegram': _telegram_payload(request.user),
             }
         )

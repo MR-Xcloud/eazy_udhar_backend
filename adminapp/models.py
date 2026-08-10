@@ -162,6 +162,20 @@ class SubscriptionInvoice(models.Model):
         (STATUS_VOID, 'Void'),
     ]
 
+    PAYMENT_METHOD_RAZORPAY = 'razorpay'
+    PAYMENT_METHOD_OFFLINE = 'offline'
+    PAYMENT_METHOD_CHOICES = [
+        (PAYMENT_METHOD_RAZORPAY, 'Razorpay'),
+        (PAYMENT_METHOD_OFFLINE, 'Offline'),
+    ]
+
+    TAX_TYPE_CGST_SGST = 'cgst_sgst'
+    TAX_TYPE_IGST = 'igst'
+    TAX_TYPE_CHOICES = [
+        (TAX_TYPE_CGST_SGST, 'CGST + SGST (intra-state)'),
+        (TAX_TYPE_IGST, 'IGST (inter-state)'),
+    ]
+
     subscription = models.ForeignKey(
         SellerSubscription,
         on_delete=models.CASCADE,
@@ -175,7 +189,27 @@ class SubscriptionInvoice(models.Model):
     invoice_number = models.CharField(max_length=50, unique=True)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    tax_type = models.CharField(
+        max_length=20, choices=TAX_TYPE_CHOICES, default=TAX_TYPE_CGST_SGST,
+        help_text='Decided at invoice creation from the seller GSTIN state code vs supplier state; frozen thereafter',
+    )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    payment_method = models.CharField(
+        max_length=20, choices=PAYMENT_METHOD_CHOICES, default=PAYMENT_METHOD_RAZORPAY
+    )
+    offline_reference = models.CharField(
+        max_length=120, blank=True, help_text='UPI/bank ref for offline payments'
+    )
+    notes = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(
+        AdminUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='recorded_invoices',
+        help_text='Admin who manually recorded this invoice (offline payments)',
+    )
+    paid_at = models.DateTimeField(null=True, blank=True)
     period_start = models.DateTimeField()
     period_end = models.DateTimeField()
     pdf_url = models.URLField(blank=True)
@@ -290,11 +324,13 @@ class AdminAlert(models.Model):
     TYPE_TRIAL_EXPIRING = 'trial_expiring'
     TYPE_SUSPENSION = 'suspension'
     TYPE_SYNC_ERROR = 'sync_error'
+    TYPE_TELEGRAM_MESSAGE = 'telegram_message'
     TYPE_CHOICES = [
         (TYPE_SMS_FAILED, 'SMS Failed'),
         (TYPE_TRIAL_EXPIRING, 'Trial Expiring'),
         (TYPE_SUSPENSION, 'Suspension'),
         (TYPE_SYNC_ERROR, 'Sync Error'),
+        (TYPE_TELEGRAM_MESSAGE, 'Telegram Message'),
     ]
 
     type = models.CharField(max_length=30, choices=TYPE_CHOICES)
@@ -477,6 +513,38 @@ class LegalDocument(models.Model):
         return self.title
 
 
+class CustomerBackup(models.Model):
+    customer = models.ForeignKey(
+        'customerapp.Customer',
+        on_delete=models.CASCADE,
+        related_name='backups',
+    )
+    label = models.CharField(max_length=200, blank=True)
+    payload = models.JSONField()
+    created_by = models.ForeignKey(
+        AdminUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='customer_backups_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    restored_at = models.DateTimeField(null=True, blank=True)
+    restored_by = models.ForeignKey(
+        AdminUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='customer_backups_restored',
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Backup of {self.customer_id} at {self.created_at}'
+
+
 class CronJobStatus(models.Model):
     LAST_STATUS_SUCCESS = 'success'
     LAST_STATUS_FAILED = 'failed'
@@ -505,3 +573,53 @@ class CronJobStatus(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class TelegramMessage(models.Model):
+    DIRECTION_IN = 'in'
+    DIRECTION_OUT = 'out'
+    DIRECTION_CHOICES = [
+        (DIRECTION_IN, 'Incoming'),
+        (DIRECTION_OUT, 'Outgoing'),
+    ]
+
+    chat_id = models.BigIntegerField()
+    telegram_user_id = models.BigIntegerField(null=True, blank=True)
+    username = models.CharField(max_length=100, blank=True)
+    first_name = models.CharField(max_length=150, blank=True)
+    last_name = models.CharField(max_length=150, blank=True)
+    text = models.TextField(blank=True)
+    message_thread_id = models.IntegerField(null=True, blank=True)
+    direction = models.CharField(max_length=3, choices=DIRECTION_CHOICES, default=DIRECTION_IN)
+    sent_by = models.ForeignKey(
+        AdminUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='telegram_replies_sent',
+    )
+    raw_update = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        who = self.username or self.first_name or str(self.chat_id)
+        preview = (self.text or '')[:50]
+        return f'{who}: {preview}'
+
+
+class TelegramChatLink(models.Model):
+    """Maps a Telegram chat to the seller who opened it via the signed /start deep link."""
+
+    chat_id = models.BigIntegerField(unique=True)
+    seller = models.ForeignKey(
+        'sellerapp.Seller',
+        on_delete=models.CASCADE,
+        related_name='telegram_chat_links',
+    )
+    linked_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.chat_id} -> {self.seller_id}'

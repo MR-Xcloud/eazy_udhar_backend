@@ -62,6 +62,12 @@ from .views.subscription_views import (
     SellerSubscriptionVerifyView,
 )
 from .views.contact_views import SellerContactUsView
+from .views.excel_report_addon_views import (
+    ExcelReportAddonCreateOrderView,
+    ExcelReportAddonStatusView,
+    ExcelReportAddonVerifyView,
+    ExcelReportDownloadView,
+)
 
 urlpatterns = [
     # P0 — Auth
@@ -209,6 +215,27 @@ urlpatterns = [
         'seller/reports/customer-statement/<str:customer_id>',
         CustomerStatementReportView.as_view(),
         name='seller-reports-customer-statement',
+    ),
+    # Addon — on-demand Excel report export
+    path(
+        'seller/addons/excel-report',
+        ExcelReportAddonStatusView.as_view(),
+        name='seller-excel-report-addon-status',
+    ),
+    path(
+        'seller/addons/excel-report/create-order',
+        ExcelReportAddonCreateOrderView.as_view(),
+        name='seller-excel-report-addon-create-order',
+    ),
+    path(
+        'seller/addons/excel-report/verify',
+        ExcelReportAddonVerifyView.as_view(),
+        name='seller-excel-report-addon-verify',
+    ),
+    path(
+        'seller/addons/excel-report/download',
+        ExcelReportDownloadView.as_view(),
+        name='seller-excel-report-addon-download',
     ),
     # P2 — Settings & business
     path('seller/settings', SettingsView.as_view(), name='seller-settings'),
