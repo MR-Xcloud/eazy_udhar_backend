@@ -61,6 +61,7 @@ from .views.subscription_views import (
     SellerSubscriptionStatusView,
     SellerSubscriptionVerifyView,
 )
+from .views.iap_views import AppleIapNotificationView, SellerIapVerifyView
 from .views.contact_views import SellerContactUsView
 from .views.excel_report_addon_views import (
     ExcelReportAddonCreateOrderView,
@@ -117,6 +118,16 @@ urlpatterns = [
         'seller/subscription/sms-packs/verify',
         SellerSmsPackVerifyView.as_view(),
         name='seller-sms-pack-verify',
+    ),
+    path(
+        'seller/iap/verify',
+        SellerIapVerifyView.as_view(),
+        name='seller-iap-verify',
+    ),
+    path(
+        'seller/iap/notifications',
+        AppleIapNotificationView.as_view(),
+        name='seller-iap-notifications',
     ),
     path('seller/dashboard', SellerDashboardView.as_view(), name='seller-dashboard'),
     path('seller/sync/push', SellerSyncPushView.as_view(), name='seller-sync-push'),

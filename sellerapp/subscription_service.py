@@ -266,6 +266,39 @@ def start_seller_trial(seller):
     )
 
 
+def expire_seller_subscriptions(seller):
+    SellerSubscription.objects.filter(seller=seller).exclude(
+        status=SellerSubscription.STATUS_CANCELLED
+    ).update(status=SellerSubscription.STATUS_EXPIRED)
+
+
+@transaction.atomic
+def activate_paid_subscription(
+    *,
+    seller,
+    plan,
+    billing_cycle,
+    billing_amount,
+    period_end=None,
+):
+    now = timezone.now()
+    if period_end is None:
+        if billing_cycle == SellerSubscriptionOrder.CYCLE_YEARLY:
+            period_end = now + timedelta(days=365)
+        else:
+            period_end = now + timedelta(days=30)
+    expire_seller_subscriptions(seller)
+    return SellerSubscription.objects.create(
+        seller=seller,
+        plan=plan,
+        status=SellerSubscription.STATUS_ACTIVE,
+        billing_amount=billing_amount,
+        current_period_start=now,
+        current_period_end=period_end,
+        trial_ends_at=None,
+    )
+
+
 def plan_to_dict(plan):
     features = _plan_features(plan)
     reminder_type = features.get('reminder_type', 'on_demand')
@@ -490,23 +523,11 @@ def verify_subscription_payment(
         raise RazorpayError('Subscription plan not found.', code='invalid_plan')
 
     now = timezone.now()
-    if billing_cycle == SellerSubscriptionOrder.CYCLE_YEARLY:
-        period_end = now + timedelta(days=365)
-    else:
-        period_end = now + timedelta(days=30)
-
-    SellerSubscription.objects.filter(seller=seller).exclude(
-        status=SellerSubscription.STATUS_CANCELLED
-    ).update(status=SellerSubscription.STATUS_EXPIRED)
-
-    SellerSubscription.objects.create(
+    activate_paid_subscription(
         seller=seller,
         plan=plan,
-        status=SellerSubscription.STATUS_ACTIVE,
+        billing_cycle=billing_cycle,
         billing_amount=order.amount,
-        current_period_start=now,
-        current_period_end=period_end,
-        trial_ends_at=None,
     )
 
     order.status = SellerSubscriptionOrder.STATUS_PAID

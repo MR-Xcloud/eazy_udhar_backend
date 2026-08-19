@@ -269,6 +269,15 @@ RAZORPAY_LIVE_KEY_SECRET = env('RAZORPAY_LIVE_KEY_SECRET')
 RAZORPAY_LIVE_WEBHOOK_SECRET = env('RAZORPAY_LIVE_WEBHOOK_SECRET')
 RAZORPAY_ROUTE_ENABLED = env_bool('RAZORPAY_ROUTE_ENABLED', 'false')
 
+# ── Apple In-App Purchase (iOS seller digital goods) ───────────────────────────
+APPLE_IAP_BUNDLE_ID = env('APPLE_IAP_BUNDLE_ID', 'com.eazyudhar.eazyUdhar')
+APPLE_IAP_ISSUER_ID = env('APPLE_IAP_ISSUER_ID')
+APPLE_IAP_KEY_ID = env('APPLE_IAP_KEY_ID')
+APPLE_IAP_PRIVATE_KEY_PATH = env('APPLE_IAP_PRIVATE_KEY_PATH')
+APPLE_IAP_PRIVATE_KEY = env('APPLE_IAP_PRIVATE_KEY')
+APPLE_IAP_ROOT_CA_PATH = env('APPLE_IAP_ROOT_CA_PATH')
+APPLE_IAP_ALLOW_XCODE = env_bool('APPLE_IAP_ALLOW_XCODE', 'false')
+
 # ── SQLite WAL (local dev only) ────────────────────────────────────────────────
 if _db_engine != 'mysql':
 

@@ -8,6 +8,7 @@ from .models import (
     CustomerReminder,
     LedgerTransaction,
     Seller,
+    SellerAppleIapTransaction,
     SellerCustomer,
     SellerDeviceToken,
     SellerNotification,
@@ -182,3 +183,26 @@ class SellerDeviceTokenAdmin(admin.ModelAdmin):
     search_fields = ('seller__business_name', 'seller__email', 'token', 'device_id')
     list_select_related = ('seller',)
     readonly_fields = ('id', 'created_at', 'updated_at')
+
+
+@admin.register(SellerAppleIapTransaction)
+class SellerAppleIapTransactionAdmin(admin.ModelAdmin):
+    list_display = (
+        'transaction_id',
+        'seller',
+        'kind',
+        'product_id',
+        'status',
+        'environment',
+        'created_at',
+    )
+    list_filter = ('kind', 'status', 'environment')
+    search_fields = (
+        'transaction_id',
+        'original_transaction_id',
+        'product_id',
+        'seller__email',
+        'seller__business_name',
+    )
+    list_select_related = ('seller',)
+    readonly_fields = ('id', 'created_at', 'updated_at', 'raw_payload')

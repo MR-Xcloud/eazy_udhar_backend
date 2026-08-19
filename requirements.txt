@@ -12,6 +12,7 @@ djangorestframework==3.17.1
 djangorestframework-simplejwt==5.5.1
 PyJWT==2.12.1
 python-dotenv==1.1.0
+cryptography==44.0.2
 
 # Image uploads (sellerapp credit_given / bill_image fields)
 Pillow==12.2.0

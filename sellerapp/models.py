@@ -675,3 +675,58 @@ class SellerDeviceToken(models.Model):
     def __str__(self):
         status = 'active' if self.is_active else 'inactive'
         return f'{self.seller.business_name} — {self.platform} ({status})'
+
+
+class SellerAppleIapTransaction(models.Model):
+    """Idempotent App Store transaction log for seller digital goods."""
+
+    KIND_SUBSCRIPTION = 'subscription'
+    KIND_SMS = 'sms'
+    KIND_EXCEL = 'excel'
+    KIND_UNKNOWN = 'unknown'
+    KIND_CHOICES = [
+        (KIND_SUBSCRIPTION, 'Subscription'),
+        (KIND_SMS, 'SMS pack'),
+        (KIND_EXCEL, 'Excel addon'),
+        (KIND_UNKNOWN, 'Unknown'),
+    ]
+
+    STATUS_GRANTED = 'granted'
+    STATUS_REVOKED = 'revoked'
+    STATUS_IGNORED = 'ignored'
+    STATUS_CHOICES = [
+        (STATUS_GRANTED, 'Granted'),
+        (STATUS_REVOKED, 'Revoked'),
+        (STATUS_IGNORED, 'Ignored'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    seller = models.ForeignKey(
+        Seller,
+        on_delete=models.CASCADE,
+        related_name='apple_iap_transactions',
+        null=True,
+        blank=True,
+    )
+    transaction_id = models.CharField(max_length=64, unique=True, db_index=True)
+    original_transaction_id = models.CharField(max_length=64, db_index=True)
+    product_id = models.CharField(max_length=180)
+    bundle_id = models.CharField(max_length=180, blank=True)
+    environment = models.CharField(max_length=20, blank=True)
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES, default=KIND_UNKNOWN)
+    plan_slug = models.CharField(max_length=100, blank=True)
+    billing_cycle = models.CharField(max_length=10, blank=True)
+    sms_quantity = models.PositiveIntegerField(default=0)
+    excel_duration_days = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_GRANTED)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    notification_uuid = models.CharField(max_length=64, blank=True, db_index=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.transaction_id} — {self.product_id} ({self.status})'
