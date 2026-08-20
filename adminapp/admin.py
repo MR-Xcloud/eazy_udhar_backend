@@ -21,6 +21,7 @@ from .models import (
     TelegramChatLink,
     TelegramMessage,
     TicketReply,
+    ExcelReportAddonPlan,
 )
 
 
@@ -121,12 +122,42 @@ class SubscriptionInvoiceAdmin(admin.ModelAdmin):
         'paid_at',
         'period_start',
         'period_end',
+        'crm_invoice_no',
+        'crm_sync_status',
+        'crm_receipt_no',
+        'crm_receipt_sync_status',
         'created_at',
     )
-    list_filter = ('status', 'payment_method', 'tax_type')
-    search_fields = ('invoice_number', 'seller__business_name', 'seller__email', 'offline_reference')
+    list_filter = ('status', 'payment_method', 'tax_type', 'crm_sync_status')
+    search_fields = (
+        'invoice_number', 'seller__business_name', 'seller__email',
+        'offline_reference', 'crm_invoice_no',
+    )
     list_select_related = ('seller', 'subscription', 'recorded_by')
-    readonly_fields = ('created_at',)
+    readonly_fields = (
+        'created_at', 'crm_invoice_no', 'crm_invoice_id', 'crm_synced_at',
+        'crm_receipt_no', 'crm_receipt_id', 'crm_receipt_synced_at',
+    )
+    actions = ('push_to_crm',)
+
+    @admin.action(description='Push selected paid invoices to CRM finance')
+    def push_to_crm(self, request, queryset):
+        from .services.crm_invoice_sync import push
+        from .services.crm_receipt_sync import push as push_receipt
+
+        ok = skipped = failed = 0
+        for invoice in queryset.select_related('seller', 'subscription__plan'):
+            if invoice.status != SubscriptionInvoice.STATUS_PAID:
+                skipped += 1
+            elif push(invoice):
+                push_receipt(invoice)
+                ok += 1
+            else:
+                failed += 1
+        self.message_user(
+            request,
+            f'{ok} pushed, {failed} failed, {skipped} skipped (not paid).',
+        )
 
 
 @admin.register(PromoCode)
@@ -304,3 +335,14 @@ class TelegramChatLinkAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+@admin.register(ExcelReportAddonPlan)
+class ExcelReportAddonPlanAdmin(admin.ModelAdmin):
+    list_display = (
+        'name', 'slug', 'duration_days', 'price_inr', 'gst_percent',
+        'is_active', 'sort_order', 'updated_at',
+    )
+    list_filter = ('is_active',)
+    search_fields = ('name', 'slug')
+    ordering = ('sort_order', 'duration_days')

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome to {{ product_name }}</title>
+</head>
+<body style="margin:0;padding:0;background:#eef2f5;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef2f5;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 6px 24px rgba(15,118,110,0.10);">
+          <tr>
+            <td style="padding:28px 32px 20px;border-bottom:1px solid #eef2f5;">
+              <h1 style="margin:0;font-size:22px;font-weight:700;color:#0f766e;">{{ product_name }}</h1>
+              <p style="margin:6px 0 0;font-size:13px;color:#14b8a6;">Your account is ready</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 32px 8px;">
+              <p style="margin:0 0 14px;font-size:17px;font-weight:600;color:#0f172a;">Welcome, {{ business_name }}!</p>
+              <p style="margin:0 0 24px;font-size:15px;line-height:1.65;color:#475569;">
+                An EazyUdhar account has been created for you. EazyUdhar is a digital udhar khata &mdash;
+                record credit given, payments received and advances for every customer, and let the app
+                chase the reminders for you.
+              </p>
+
+              <table role="presentation" cellspacing="0" cellpadding="0" width="100%" style="margin:0 0 24px;">
+                <tr>
+                  <td style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:12px;padding:22px 24px;">
+                    <div style="font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#0f766e;margin-bottom:14px;">Your sign-in details</div>
+                    <table role="presentation" cellspacing="0" cellpadding="0" width="100%">
+                      <tr>
+                        <td style="padding:0 0 10px;font-size:13px;color:#0f766e;width:110px;">Email</td>
+                        <td style="padding:0 0 10px;font-size:15px;font-weight:600;color:#0f172a;word-break:break-all;">{{ login_email }}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:0;font-size:13px;color:#0f766e;">Password</td>
+                        <td style="padding:0;font-size:19px;font-weight:700;letter-spacing:1px;color:#0f766e;font-family:Consolas,monospace;word-break:break-all;">{{ temp_password }}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              {% if app_url %}
+              <table role="presentation" cellspacing="0" cellpadding="0" width="100%" style="margin:0 0 26px;">
+                <tr>
+                  <td align="center">
+                    <a href="{{ app_url }}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;padding:14px 34px;border-radius:10px;">Sign in to {{ product_name }}</a>
+                    <p style="margin:12px 0 0;font-size:12px;color:#94a3b8;word-break:break-all;">{{ app_url }}</p>
+                  </td>
+                </tr>
+              </table>
+              {% endif %}
+
+              <div style="border-top:1px solid #eef2f5;padding-top:22px;">
+                <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:12px;">First steps</div>
+                <table role="presentation" cellspacing="0" cellpadding="0" width="100%">
+                  <tr>
+                    <td style="padding:0 0 10px;font-size:14px;line-height:1.6;color:#475569;">
+                      <strong style="color:#0f766e;">1.</strong>&nbsp; Sign in and change your password from Settings.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 0 10px;font-size:14px;line-height:1.6;color:#475569;">
+                      <strong style="color:#0f766e;">2.</strong>&nbsp; Complete your shop profile &mdash; phone, address, GST and UPI.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 0 10px;font-size:14px;line-height:1.6;color:#475569;">
+                      <strong style="color:#0f766e;">3.</strong>&nbsp; Add your customers and start recording udhar entries.
+                    </td>
+                  </tr>
+                </table>
+              </div>
+
+              {% if trial_days %}
+              <p style="margin:18px 0 0;font-size:14px;line-height:1.6;color:#475569;background:#f8fafc;border-radius:10px;padding:14px 16px;">
+                Your <strong style="color:#0f172a;">{{ plan_name }}</strong> free trial is active for
+                <strong style="color:#0f172a;">{{ trial_days }} days</strong>{% if trial_ends_on %}, until <strong style="color:#0f172a;">{{ trial_ends_on }}</strong>{% endif %}.
+              </p>
+              {% endif %}
+
+              <p style="margin:22px 0 0;font-size:13px;line-height:1.6;color:#94a3b8;">
+                Keep this password private and change it after your first sign-in.
+                Need help? Write to <a href="mailto:{{ support_email }}" style="color:#0f766e;text-decoration:none;">{{ support_email }}</a>.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:24px 32px 28px;text-align:center;">
+              <p style="margin:0;font-size:13px;font-weight:700;color:#0f766e;">{{ brand_footer }}</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

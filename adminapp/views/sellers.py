@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
+from customerapp.email_otp import send_seller_invite_email
 from sellerapp.models import (
     Seller,
     SellerCustomer,
@@ -41,6 +42,7 @@ def _filter_sellers(request):
             | Q(email__icontains=search)
             | Q(phone__icontains=search)
             | Q(full_name__icontains=search)
+            | Q(signup_city__icontains=search)
         )
     status_param = request.query_params.get('status')
     if status_param == 'active':
@@ -83,6 +85,8 @@ class SellerExportView(AdminAPIView):
                     item['status'],
                     item['subscription_status'] or '',
                     item['created_at'],
+                    item['signup_location'] or '',
+                    item['signup_ip'] or '',
                 ]
             )
         return csv_response(
@@ -98,6 +102,8 @@ class SellerExportView(AdminAPIView):
                 'status',
                 'subscription_status',
                 'created_at',
+                'signup_location',
+                'signup_ip',
             ],
         )
 
@@ -132,6 +138,8 @@ class SellerInviteView(AdminAPIView):
         SellerSettings.objects.get_or_create(seller=seller)
 
         plan = SubscriptionPlan.objects.filter(is_active=True).order_by('sort_order').first()
+        trial_days = 0
+        trial_ends_on = ''
         if plan and (plan.trial_days or request.data.get('start_trial', True)):
             now = timezone.now()
             trial_days = plan.trial_days or 14
@@ -144,12 +152,39 @@ class SellerInviteView(AdminAPIView):
                 current_period_end=now + timedelta(days=trial_days),
                 trial_ends_at=now + timedelta(days=trial_days),
             )
+            trial_ends_on = timezone.localtime(
+                now + timedelta(days=trial_days)
+            ).strftime('%d %b %Y')
+
+        # Welcome email carries the credentials; admin@inwizy.com is CC'd for the record.
+        delivery = send_seller_invite_email(
+            to_email=seller.email,
+            business_name=business_name,
+            temp_password=password,
+            plan_name=plan.name if plan else '',
+            trial_days=trial_days,
+            trial_ends_on=trial_ends_on,
+        )
 
         log_audit(request.user, 'seller_invite', 'seller', seller.pk, request=request)
+        if delivery.get('sent'):
+            message = (
+                f'Seller invited. Login details emailed to {seller.email} '
+                f"(cc {delivery.get('cc') or 'none'})."
+            )
+        else:
+            # Email failed — fall back to showing the password so the admin can
+            # still pass it on by phone or WhatsApp.
+            message = (
+                f"Seller invited, but the welcome email could not be sent "
+                f"({delivery.get('error') or 'unknown error'}). "
+                f'Temporary password: {password}'
+            )
         return Response(
             {
                 'seller': seller_list_item(seller),
-                'message': f'Seller invited. Temporary password: {password}',
+                'message': message,
+                'delivery': {'email': delivery},
             },
             status=status.HTTP_201_CREATED,
         )
@@ -297,6 +332,62 @@ class SellerSettingsView(AdminAPIView):
         settings.save()
         log_audit(request.user, 'seller_settings_update', 'seller', seller.pk, request=request)
         return Response(seller_settings_dict(seller))
+
+
+class SellerBackupRestoreView(AdminAPIView):
+    """Restore a seller's EOD Excel backup (customer-sent file, admin-uploaded).
+
+    Additive merge only — see excel_report_import_service for the matching/dedup
+    rules. Requires an elevated role since this writes real ledger data.
+    """
+
+    def get_permissions(self):
+        from ..models import AdminUser
+
+        return [perm() for perm in AdminAPIView.permission_classes] + [
+            RoleRequired([AdminUser.ROLE_SUPPORT, AdminUser.ROLE_SUPER_ADMIN])
+        ]
+
+    def post(self, request, pk):
+        try:
+            seller = Seller.objects.get(pk=pk)
+        except Seller.DoesNotExist:
+            return Response({'detail': 'Seller not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        upload = request.FILES.get('file')
+        if not upload:
+            return Response({'detail': 'No file uploaded.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        force = str(request.data.get('force_identity_mismatch', '')).strip().lower() in ('1', 'true', 'yes')
+
+        from sellerapp.excel_report_import_service import RestoreError, restore_seller_backup
+
+        try:
+            result = restore_seller_backup(seller, upload, force_identity_mismatch=force)
+        except RestoreError as exc:
+            log_audit(
+                request.user, 'seller_backup_restore_failed', 'seller', seller.pk,
+                {'code': exc.code, 'message': exc.message}, request=request,
+            )
+            status_code = (
+                status.HTTP_409_CONFLICT
+                if exc.code in ('identity_mismatch', 'identity_unverifiable')
+                else status.HTTP_422_UNPROCESSABLE_ENTITY
+            )
+            return Response({'detail': exc.message, 'code': exc.code}, status=status_code)
+
+        log_audit(
+            request.user, 'seller_backup_restore', 'seller', seller.pk,
+            {k: v for k, v in result.items() if k != 'warnings'}, request=request,
+        )
+        return Response({
+            'detail': (
+                f"Restored: {result['customers_created']} new customer(s), "
+                f"{result['transactions_imported']} new transaction(s). "
+                f"{result['transactions_skipped_duplicate']} row(s) already existed."
+            ),
+            **result,
+        })
 
 
 class SellerEodBackupSendView(AdminAPIView):

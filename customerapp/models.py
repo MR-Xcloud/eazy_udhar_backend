@@ -17,6 +17,21 @@ class Customer(AbstractUser):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Where this customer signed up from, derived from the registration
+    # request's IP. City-level only — see easyudhar/geoip.py.
+    signup_ip = models.GenericIPAddressField(null=True, blank=True)
+    signup_city = models.CharField(max_length=100, blank=True, default='')
+    signup_region = models.CharField(max_length=100, blank=True, default='')
+    signup_country = models.CharField(max_length=100, blank=True, default='')
+    signup_source = models.CharField(max_length=20, blank=True, default='')
+    signup_located_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def signup_location(self):
+        """"City, Region, Country" with the blanks dropped."""
+        parts = [self.signup_city, self.signup_region, self.signup_country]
+        return ', '.join(p for p in parts if p)
+
     groups = models.ManyToManyField(
         'auth.Group',
         verbose_name='groups',

@@ -25,6 +25,9 @@ from .models import SellerExcelReportOrder, SellerSettings
 
 EXCEL_REPORT_GST_PERCENT = Decimal('18')
 
+# Seed tiers. The live catalogue is ExcelReportAddonPlan, managed from the admin
+# panel; this dict is what that table was seeded with and the fallback if it is
+# ever emptied, so the seller app never shows an add-on with nothing to buy.
 EXCEL_REPORT_ADDON_PLANS = {
     '1m': {'name': '1 Month', 'duration_days': 30, 'price_inr': Decimal('49')},
     '3m': {'name': '3 Months', 'duration_days': 90, 'price_inr': Decimal('149')},
@@ -33,28 +36,52 @@ EXCEL_REPORT_ADDON_PLANS = {
 }
 
 
+def _plan_catalogue():
+    """Active plans as {slug: {name, duration_days, price_inr, gst_percent}},
+    from the admin-managed table, falling back to the seed tiers."""
+    from adminapp.models import ExcelReportAddonPlan
+
+    rows = ExcelReportAddonPlan.objects.filter(is_active=True)
+    catalogue = {
+        row.slug: {
+            'name': row.name,
+            'duration_days': row.duration_days,
+            'price_inr': row.price_inr,
+            'gst_percent': row.gst_percent,
+        }
+        for row in rows
+    }
+    if catalogue:
+        return catalogue
+    return {
+        slug: {**plan, 'gst_percent': EXCEL_REPORT_GST_PERCENT}
+        for slug, plan in EXCEL_REPORT_ADDON_PLANS.items()
+    }
+
+
 def _money(value):
     return Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
-def _with_gst(subtotal):
+def _with_gst(subtotal, gst_percent=EXCEL_REPORT_GST_PERCENT):
     """Addon prices are exclusive of GST; return subtotal / gst / total."""
     subtotal = _money(subtotal)
-    gst_amount = _money(subtotal * EXCEL_REPORT_GST_PERCENT / Decimal('100'))
+    gst_percent = Decimal(str(gst_percent))
+    gst_amount = _money(subtotal * gst_percent / Decimal('100'))
     total = _money(subtotal + gst_amount)
     return {
         'subtotal': subtotal,
-        'gst_percent': float(EXCEL_REPORT_GST_PERCENT),
+        'gst_percent': float(gst_percent),
         'gst_amount': gst_amount,
         'total': total,
-        'price_note': f'All prices are exclusive of {float(EXCEL_REPORT_GST_PERCENT):g}% GST',
+        'price_note': f'All prices are exclusive of {float(gst_percent):g}% GST',
     }
 
 
 def list_excel_report_addon_plans():
     plans = []
-    for slug, plan in EXCEL_REPORT_ADDON_PLANS.items():
-        pricing = _with_gst(plan['price_inr'])
+    for slug, plan in _plan_catalogue().items():
+        pricing = _with_gst(plan['price_inr'], plan.get('gst_percent', EXCEL_REPORT_GST_PERCENT))
         plans.append(
             {
                 'plan_slug': slug,
@@ -114,11 +141,11 @@ def create_excel_report_addon_order(*, seller, plan_slug):
         )
 
     slug = (plan_slug or '').strip()
-    plan = EXCEL_REPORT_ADDON_PLANS.get(slug)
+    plan = _plan_catalogue().get(slug)
     if plan is None:
         raise RazorpayError('Excel report addon plan not found.', code='invalid_plan')
 
-    pricing = _with_gst(plan['price_inr'])
+    pricing = _with_gst(plan['price_inr'], plan.get('gst_percent', EXCEL_REPORT_GST_PERCENT))
     amount = pricing['total']  # charge base + 18% GST
     reference_id = f'XLR-{uuid.uuid4().hex[:12].upper()}'
     amount_paise = _amount_paise(amount)
@@ -215,6 +242,13 @@ def verify_excel_report_addon_payment(
     )
 
     extend_excel_report_addon(seller, order.duration_days)
+
+    # Raise the GST invoice and book it into CRM finance. Deliberately after
+    # access is granted and non-fatal — the seller has paid, so a billing hiccup
+    # must never fail the purchase; `sync_crm_invoices` catches the rest.
+    from adminapp.services.addon_invoices import issue_addon_invoice
+
+    issue_addon_invoice(order, gst_percent=EXCEL_REPORT_GST_PERCENT)
 
     return {
         'message': 'Excel report addon activated',

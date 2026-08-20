@@ -181,6 +181,13 @@ def verify_sms_pack_payment(
 
     new_balance = credit_sms_pack_balance(seller, order.sms_quantity)
 
+    # Raise the GST invoice and book it into CRM finance. Deliberately after
+    # the balance is credited and non-fatal — the seller has paid, so a billing
+    # hiccup must never fail the purchase; `sync_crm_invoices` catches the rest.
+    from adminapp.services.addon_invoices import issue_addon_invoice
+
+    issue_addon_invoice(order)
+
     from .subscription_service import subscription_status_payload
 
     return {

@@ -1,0 +1,33 @@
+# EasyUdhar backend — install: pip install -r requirements.txt
+
+# Core
+Django==6.0.5
+asgiref==3.11.1
+sqlparse==0.5.5
+tzdata==2026.2
+
+# REST API & JWT auth
+django-cors-headers==4.9.0
+djangorestframework==3.17.1
+djangorestframework-simplejwt==5.5.1
+PyJWT==2.12.1
+python-dotenv==1.1.0
+cryptography==44.0.2
+
+# Image uploads (sellerapp credit_given / bill_image fields)
+Pillow==12.2.0
+
+# Invoice PDF generation (adminapp subscription invoices)
+reportlab==5.0.0
+
+# Excel export (seller EOD transaction backup report)
+openpyxl==3.1.5
+
+# Production WSGI server
+gunicorn==23.0.0
+
+# Firebase Cloud Messaging (push notifications)
+firebase-admin==6.9.0
+
+# MariaDB / MySQL — PyMySQL works without sudo (no mysqlclient compile)
+PyMySQL==1.1.1

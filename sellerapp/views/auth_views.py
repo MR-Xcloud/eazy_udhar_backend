@@ -5,6 +5,8 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from easyudhar.signup_location import capture_signup_location
+
 from ..authentication import SellerJWTAuthentication
 from ..permissions import IsSeller
 from ..serializers import (
@@ -24,6 +26,7 @@ class SellerRegisterView(APIView):
         serializer = SellerRegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        capture_signup_location(user, request)
         return Response(
             {
                 'message': 'Registration successful',

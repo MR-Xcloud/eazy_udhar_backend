@@ -131,6 +131,26 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
 }
 
+# ── Signup geolocation ───────────────────────────────────────────────────────
+# Resolves the registration IP to a city. Prefers a local MaxMind GeoLite2-City
+# database; falls back to an HTTP service when no database is configured.
+GEOIP_ENABLED = env_bool('GEOIP_ENABLED', 'true')
+GEOIP_CITY_DB = env('GEOIP_CITY_DB')
+GEOIP_HTTP_URL = env(
+    'GEOIP_HTTP_URL',
+    'http://ip-api.com/json/{ip}?fields=status,country,regionName,city',
+)
+GEOIP_HTTP_TIMEOUT = env_int('GEOIP_HTTP_TIMEOUT', '3')
+
+# MaxMind GeoLite2 web service — used when no local .mmdb is installed.
+MAXMIND_ACCOUNT_ID = env('MAXMIND_ACCOUNT_ID')
+MAXMIND_LICENSE_KEY = env('MAXMIND_LICENSE_KEY')
+MAXMIND_WS_HOST = env('MAXMIND_WS_HOST', 'geolite.info')
+
+_default_geoip_db = BASE_DIR / 'data' / 'GeoLite2-City.mmdb'
+if not GEOIP_CITY_DB and _default_geoip_db.exists():
+    GEOIP_CITY_DB = str(_default_geoip_db)
+
 # ── Firebase (FCM) ───────────────────────────────────────────────────────────
 FIREBASE_PROJECT_ID = env('FIREBASE_PROJECT_ID')
 FIREBASE_CREDENTIALS_PATH = env('FIREBASE_CREDENTIALS_PATH')
@@ -232,6 +252,12 @@ if env_bool('BEHIND_HTTPS_PROXY'):
     SESSION_COOKIE_SECURE = True
 
 # ── Email (Postmark OTP) ───────────────────────────────────────────────────────
+# CRM finance module (crm.inwizy.com) — paid subscription invoices are pushed
+# to its internal ingest endpoint. CRM_API_TOKEN must match INTERNAL_API_TOKEN
+# in the CRM's .env; leave blank to disable the sync entirely.
+CRM_API_URL = env('CRM_API_URL', 'https://crm.inwizy.com').rstrip('/')
+CRM_API_TOKEN = env('CRM_API_TOKEN')
+
 POSTMARK_SERVER_TOKEN = env('POSTMARK_SERVER_TOKEN')
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = env('EMAIL_HOST', 'smtp.postmarkapp.com')
@@ -247,11 +273,23 @@ OTP_EXPIRY_MINUTES = env_int('OTP_EXPIRY_MINUTES', '5')
 OTP_RESEND_COOLDOWN_SECONDS = env_int('OTP_RESEND_COOLDOWN_SECONDS', '60')
 OTP_EMAIL_LOGO_URL = env('OTP_EMAIL_LOGO_URL')
 
+# ── Apple In-App Purchase (iOS) ────────────────────────────────────────────────
+APPLE_IAP_BUNDLE_ID = env('APPLE_IAP_BUNDLE_ID', 'com.eazyudhar.eazyUdhar')
+APPLE_IAP_ISSUER_ID = env('APPLE_IAP_ISSUER_ID')
+APPLE_IAP_KEY_ID = env('APPLE_IAP_KEY_ID')
+APPLE_IAP_PRIVATE_KEY_PATH = env('APPLE_IAP_PRIVATE_KEY_PATH')
+APPLE_IAP_PRIVATE_KEY = env('APPLE_IAP_PRIVATE_KEY')
+APPLE_IAP_ROOT_CA_PATH = env('APPLE_IAP_ROOT_CA_PATH')
+APPLE_IAP_ALLOW_XCODE = env_bool('APPLE_IAP_ALLOW_XCODE', 'false')
+
 # ── Telegram support bot ───────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = env('TELEGRAM_BOT_TOKEN')
 TELEGRAM_BOT_USERNAME = env('TELEGRAM_BOT_USERNAME')  # without @, e.g. EazyUdharSupportBot
 TELEGRAM_WEBHOOK_SECRET = env('TELEGRAM_WEBHOOK_SECRET')  # random path segment, verifies inbound updates
 SUPPORT_EMAIL = env('SUPPORT_EMAIL', 'support@eazyudhar.com')
+
+# Seller-facing web app, linked from onboarding/invite emails.
+SELLER_APP_URL = env('SELLER_APP_URL', 'https://eazyudhar.com').rstrip('/')
 
 # ── WhatsApp (optional) ────────────────────────────────────────────────────────
 WHATSAPP_API_ENABLED = env_bool('WHATSAPP_API_ENABLED', 'false')
@@ -268,15 +306,6 @@ RAZORPAY_LIVE_KEY_ID = env('RAZORPAY_LIVE_KEY_ID')
 RAZORPAY_LIVE_KEY_SECRET = env('RAZORPAY_LIVE_KEY_SECRET')
 RAZORPAY_LIVE_WEBHOOK_SECRET = env('RAZORPAY_LIVE_WEBHOOK_SECRET')
 RAZORPAY_ROUTE_ENABLED = env_bool('RAZORPAY_ROUTE_ENABLED', 'false')
-
-# ── Apple In-App Purchase (iOS seller digital goods) ───────────────────────────
-APPLE_IAP_BUNDLE_ID = env('APPLE_IAP_BUNDLE_ID', 'com.eazyudhar.eazyUdhar')
-APPLE_IAP_ISSUER_ID = env('APPLE_IAP_ISSUER_ID')
-APPLE_IAP_KEY_ID = env('APPLE_IAP_KEY_ID')
-APPLE_IAP_PRIVATE_KEY_PATH = env('APPLE_IAP_PRIVATE_KEY_PATH')
-APPLE_IAP_PRIVATE_KEY = env('APPLE_IAP_PRIVATE_KEY')
-APPLE_IAP_ROOT_CA_PATH = env('APPLE_IAP_ROOT_CA_PATH')
-APPLE_IAP_ALLOW_XCODE = env_bool('APPLE_IAP_ALLOW_XCODE', 'false')
 
 # ── SQLite WAL (local dev only) ────────────────────────────────────────────────
 if _db_engine != 'mysql':

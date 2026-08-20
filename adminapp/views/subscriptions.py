@@ -14,8 +14,12 @@ from ..models import (
     SubscriptionPlan,
 )
 from ..permissions import RoleRequired
+from ..services.crm_invoice_sync import push as push_invoice_to_crm
+from ..services.crm_receipt_sync import push as push_receipt_to_crm
 from ..services.download_tokens import make_invoice_download_token, verify_invoice_download_token
 from ..services.gst import determine_tax_type
+from ..services.invoice_email import email_invoice
+from ..services.invoice_numbering import next_invoice_number
 from ..services.invoice_pdf import (
     COMPANY_BANK_ACCOUNT_NO,
     COMPANY_BANK_NAME,
@@ -87,12 +91,17 @@ def _invoice_item(invoice, detailed=False):
         'subscription_id': invoice.subscription_id,
         'seller_id': invoice.seller_id,
         'seller_name': invoice.seller.business_name,
-        'invoice_number': invoice.invoice_number,
+        # CRM finance owns the customer-facing number once the invoice is
+        # ingested there; the local one stays exposed for support lookups.
+        'invoice_number': invoice.display_number,
+        'local_invoice_number': invoice.invoice_number,
         'amount': float(invoice.amount),
         'tax_amount': float(invoice.tax_amount),
         'tax_type': invoice.tax_type,
         'total_amount': float(invoice.amount + invoice.tax_amount),
-        'currency': invoice.subscription.currency,
+        'currency': invoice.currency,
+        'kind': invoice.kind,
+        'kind_label': invoice.get_kind_display(),
         'status': invoice.status,
         'payment_method': invoice.payment_method,
         'offline_reference': invoice.offline_reference or None,
@@ -108,11 +117,15 @@ def _invoice_item(invoice, detailed=False):
             f'{ADMIN_API_BASE}/subscriptions/invoices/{invoice.id}/download'
             f'?token={make_invoice_download_token(invoice.id)}'
         ),
+        'crm_invoice_no': invoice.crm_invoice_no or None,
+        'crm_invoice_id': invoice.crm_invoice_id,
+        'crm_sync_status': invoice.crm_sync_status,
+        'crm_synced_at': invoice.crm_synced_at.isoformat() if invoice.crm_synced_at else None,
         'created_at': invoice.created_at.isoformat(),
     }
     if detailed:
         item.update({
-            'plan_name': invoice.subscription.plan.name,
+            'plan_name': invoice.plan_label,
             'seller_email': invoice.seller.email,
             'seller_phone': invoice.seller.phone,
             'seller_gst_number': invoice.seller.gst_number or None,
@@ -120,12 +133,6 @@ def _invoice_item(invoice, detailed=False):
     return item
 
 
-def _next_invoice_number():
-    """INV-YYYYMM-#### sequential within the month, e.g. INV-202607-0001."""
-    now = timezone.now()
-    prefix = f'INV-{now:%Y%m}-'
-    count = SubscriptionInvoice.objects.filter(invoice_number__startswith=prefix).count()
-    return f'{prefix}{count + 1:04d}'
 
 
 class SubscriptionListView(AdminAPIView):
@@ -144,6 +151,199 @@ class SubscriptionListView(AdminAPIView):
         page, paginator = self.paginate(request, qs)
         data = [_subscription_item(s) for s in page]
         return paginator.get_paginated_response(data)
+
+
+def _invoice_ref(invoice):
+    """The billing half of an entitlement row — nothing to show until the
+    purchase actually raised an invoice."""
+    if invoice is None:
+        return {
+            'invoice_id': None,
+            'invoice_number': None,
+            'invoice_download_url': None,
+            'invoice_status': None,
+            'crm_invoice_no': None,
+            'crm_sync_status': None,
+        }
+    return {
+        'invoice_id': invoice.id,
+        'invoice_number': invoice.display_number,
+        'invoice_download_url': (
+            f'{ADMIN_API_BASE}/subscriptions/invoices/{invoice.id}/download'
+            f'?token={make_invoice_download_token(invoice.id)}'
+        ),
+        'invoice_status': invoice.status,
+        'crm_invoice_no': invoice.crm_invoice_no or None,
+        'crm_sync_status': invoice.crm_sync_status,
+    }
+
+
+def _entitlement_state(end_at, now, *, is_trial=False):
+    if end_at is None:
+        return 'active', None
+    if end_at <= now:
+        return 'expired', 0
+    return ('trial' if is_trial else 'active'), max((end_at - now).days, 0)
+
+
+def _plan_entitlement(sub, now):
+    """A seller's paid/trial plan subscription, as an entitlement row."""
+    invoice = (
+        SubscriptionInvoice.objects
+        .filter(subscription=sub)
+        .order_by('-created_at')
+        .first()
+    )
+    state, days = _entitlement_state(
+        sub.current_period_end, now, is_trial=sub.status == SellerSubscription.STATUS_TRIAL
+    )
+    if sub.status in (SellerSubscription.STATUS_CANCELLED, SellerSubscription.STATUS_EXPIRED):
+        state = sub.status
+    if invoice is not None:
+        payment_mode = invoice.get_payment_method_display()
+        payment_reference = invoice.offline_reference or None
+    else:
+        payment_mode = 'Razorpay' if sub.razorpay_subscription_id else None
+        payment_reference = sub.razorpay_subscription_id or None
+    item = {
+        'key': f'subscription-{sub.id}',
+        'kind': 'subscription',
+        'kind_label': 'Plan subscription',
+        'source_id': sub.id,
+        'seller_id': sub.seller_id,
+        'seller_name': sub.seller.business_name,
+        'seller_email': sub.seller.email,
+        'seller_phone': sub.seller.phone,
+        'plan_name': sub.plan.name,
+        'status': state,
+        'raw_status': sub.status,
+        'start_at': sub.current_period_start.isoformat(),
+        'end_at': sub.current_period_end.isoformat(),
+        'days_remaining': days,
+        'amount': float(sub.billing_amount),
+        'currency': sub.currency,
+        'payment_mode': payment_mode,
+        'payment_reference': payment_reference,
+        'purchased_at': sub.created_at.isoformat(),
+    }
+    item.update(_invoice_ref(invoice))
+    return item
+
+
+def _excel_addon_entitlement(settings_row, now):
+    """The Excel-report add-on is an expiry stamp on SellerSettings, not a row
+    of its own — top-ups stack onto the same expiry. The latest paid order is
+    what that expiry was last bought with, so it supplies price/plan/invoice."""
+    from sellerapp.models import SellerExcelReportOrder
+
+    seller = settings_row.seller
+    expires_at = settings_row.excel_report_addon_expires_at
+    order = (
+        SellerExcelReportOrder.objects
+        .filter(seller=seller, status=SellerExcelReportOrder.STATUS_PAID)
+        .prefetch_related('invoices')
+        .order_by('-paid_at', '-created_at')
+        .first()
+    )
+    invoice = order.invoices.first() if order else None
+    state, days = _entitlement_state(expires_at, now)
+    started_at = (order.paid_at or order.created_at) if order else None
+    if invoice is not None and invoice.payment_method == SubscriptionInvoice.PAYMENT_METHOD_OFFLINE:
+        payment_mode = invoice.get_payment_method_display()
+        payment_reference = invoice.offline_reference or None
+    elif order is not None:
+        payment_mode = 'Razorpay'
+        payment_reference = order.razorpay_payment_id or order.reference_id
+    else:
+        # Access with no paid order behind it — granted by hand in the DB/admin.
+        payment_mode = None
+        payment_reference = None
+    item = {
+        'key': f'addon_excel-{seller.id}',
+        'kind': 'addon_excel',
+        'kind_label': 'Excel report add-on',
+        'source_id': str(order.id) if order else None,
+        'seller_id': seller.id,
+        'seller_name': seller.business_name,
+        'seller_email': seller.email,
+        'seller_phone': seller.phone,
+        'plan_name': order.plan_name if order else 'Excel report add-on',
+        'status': state,
+        'raw_status': state,
+        'start_at': started_at.isoformat() if started_at else None,
+        'end_at': expires_at.isoformat() if expires_at else None,
+        'days_remaining': days,
+        'amount': float(order.amount) if order else None,
+        'currency': order.currency if order else 'INR',
+        'payment_mode': payment_mode,
+        'payment_reference': payment_reference,
+        'purchased_at': started_at.isoformat() if started_at else None,
+    }
+    item.update(_invoice_ref(invoice))
+    return item
+
+
+class ActiveEntitlementListView(AdminAPIView):
+    """Every paid thing a seller currently holds — plan subscriptions and the
+    Excel-report add-on — in one list with its window, price, payment mode and
+    invoice. Add-on access is an expiry on SellerSettings, not a
+    SellerSubscription row, which is why the plain subscription list can't
+    answer "what does this seller have right now?"."""
+
+    def get(self, request):
+        from sellerapp.models import SellerSettings
+
+        now = timezone.now()
+        kind = (request.query_params.get('kind') or '').strip()
+        state = (request.query_params.get('status') or 'current').strip().lower()
+        search = (request.query_params.get('search') or '').strip()
+        seller_id = request.query_params.get('seller_id')
+
+        def seller_search(qs, extra=None):
+            cond = (
+                Q(seller__business_name__icontains=search)
+                | Q(seller__email__icontains=search)
+                | Q(seller__phone__icontains=search)
+            )
+            return qs.filter(cond | extra if extra is not None else cond)
+
+        rows = []
+
+        if kind in ('', 'subscription'):
+            subs = SellerSubscription.objects.select_related('seller', 'plan')
+            if seller_id:
+                subs = subs.filter(seller_id=seller_id)
+            if search:
+                subs = seller_search(subs, Q(plan__name__icontains=search))
+            if state == 'current':
+                subs = subs.filter(
+                    status__in=[SellerSubscription.STATUS_TRIAL, SellerSubscription.STATUS_ACTIVE],
+                    current_period_end__gt=now,
+                )
+            rows.extend(_plan_entitlement(s, now) for s in subs)
+
+        if kind in ('', 'addon_excel'):
+            addons = (
+                SellerSettings.objects
+                .select_related('seller')
+                .exclude(excel_report_addon_expires_at=None)
+            )
+            if seller_id:
+                addons = addons.filter(seller_id=seller_id)
+            if search:
+                addons = seller_search(addons)
+            if state == 'current':
+                addons = addons.filter(excel_report_addon_expires_at__gt=now)
+            rows.extend(_excel_addon_entitlement(a, now) for a in addons)
+
+        if state == 'expired':
+            rows = [r for r in rows if r['status'] in ('expired', 'cancelled')]
+
+        # Soonest expiry first — that's the list support actually works off.
+        rows.sort(key=lambda r: (r['end_at'] is None, r['end_at'] or ''))
+
+        page, paginator = self.paginate(request, rows)
+        return paginator.get_paginated_response(page)
 
 
 class SubscriptionCancelView(AdminAPIView):
@@ -373,13 +573,18 @@ class PaymentRefundView(AdminAPIView):
 
 class InvoiceListView(AdminAPIView):
     def get(self, request):
-        qs = SubscriptionInvoice.objects.select_related('subscription', 'seller').order_by('-created_at')
+        qs = SubscriptionInvoice.objects.select_related(
+            'subscription__plan', 'seller'
+        ).order_by('-created_at')
         seller_id = request.query_params.get('seller_id')
         if seller_id:
             qs = qs.filter(seller_id=seller_id)
         payment_method = request.query_params.get('payment_method')
         if payment_method:
             qs = qs.filter(payment_method=payment_method)
+        kind = request.query_params.get('kind')
+        if kind:
+            qs = qs.filter(kind=kind)
         page, paginator = self.paginate(request, qs)
         data = [_invoice_item(inv) for inv in page]
         return paginator.get_paginated_response(data)
@@ -422,7 +627,7 @@ class InvoiceListView(AdminAPIView):
         invoice = SubscriptionInvoice.objects.create(
             subscription=sub,
             seller=sub.seller,
-            invoice_number=_next_invoice_number(),
+            invoice_number=next_invoice_number(),
             amount=amount,
             tax_amount=tax_amount,
             tax_type=determine_tax_type(sub.seller.gst_number),
@@ -443,7 +648,18 @@ class InvoiceListView(AdminAPIView):
             {'payment_method': payment_method, 'amount': str(amount)},
             request,
         )
+        # Book the sale in the CRM finance module *before* rendering the PDF:
+        # CRM mints the invoice number the document has to carry. Paid only — a
+        # draft is not a booked sale yet. push() swallows its own errors, and
+        # `sync_crm_invoices` retries (and re-renders) anything left behind.
+        if invoice.status == SubscriptionInvoice.STATUS_PAID:
+            push_invoice_to_crm(invoice)
+            # Then the money: the invoice push raises it open, this books the
+            # payment and receipt against it and marks it paid in CRM.
+            push_receipt_to_crm(invoice)
+
         ensure_invoice_pdf(invoice)
+
         return Response(_invoice_item(invoice, detailed=True), status=status.HTTP_201_CREATED)
 
 
@@ -467,41 +683,15 @@ class InvoiceSendEmailView(AdminAPIView):
         except SubscriptionInvoice.DoesNotExist:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        from customerapp.email_otp import send_invoice_email
+        result = email_invoice(invoice)
+        if not result['sent']:
+            failed = status.HTTP_400_BAD_REQUEST if not invoice.seller.email \
+                else status.HTTP_503_SERVICE_UNAVAILABLE
+            return Response(
+                {'detail': result.get('error') or 'Could not send email.'}, status=failed
+            )
 
         seller = invoice.seller
-        if not seller.email:
-            return Response({'detail': 'This seller has no email on file.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        sub = invoice.subscription
-        # Permanent, unauthenticated /media/ link — unlike the signed
-        # download_url used in the admin panel, an emailed link needs to keep
-        # working whenever the recipient eventually opens the email.
-        download_url = ensure_invoice_pdf(invoice)
-        result = send_invoice_email(
-            to_email=seller.email,
-            business_name=seller.business_name,
-            invoice_number=invoice.invoice_number,
-            amount=invoice.amount,
-            tax_lines=tax_line_items(invoice),
-            total_amount=invoice.amount + invoice.tax_amount,
-            status_label=invoice.get_status_display(),
-            plan_name=sub.plan.name,
-            period_start=invoice.period_start.strftime('%d %b %Y'),
-            period_end=invoice.period_end.strftime('%d %b %Y'),
-            payment_method_label=invoice.get_payment_method_display(),
-            offline_reference=invoice.offline_reference or None,
-            download_url=download_url,
-            bank_name=COMPANY_BANK_NAME,
-            bank_account_no=COMPANY_BANK_ACCOUNT_NO,
-            support_email=COMPANY_EMAIL,
-            company_name=COMPANY_NAME,
-        )
-        if not result['sent']:
-            return Response({'detail': result.get('error') or 'Could not send email.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        invoice.emailed_at = timezone.now()
-        invoice.save(update_fields=['emailed_at'])
         log_audit(request.user, 'invoice_email_sent', 'invoice', invoice.pk, {'to': seller.email}, request)
         return Response({
             'detail': f'Invoice emailed to {seller.email}.',

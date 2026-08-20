@@ -344,6 +344,9 @@ def add_credit(
 
     from .daily_sms import queued_sms_result, record_daily_activity, seller_auto_sms_enabled
 
+    # Lock row so concurrent credits/payments cannot lose updates to outstanding.
+    customer = SellerCustomer.objects.select_for_update().get(pk=customer.pk)
+
     if send_sms is None:
         send_sms = settings.NIMBUS_SMS_ENABLED
     if send_sms and not seller_auto_sms_enabled(seller):
@@ -463,6 +466,10 @@ def _receive_payment(
     from django.conf import settings
 
     from .daily_sms import queued_sms_result, record_daily_activity, seller_auto_sms_enabled
+
+    # Lock row so duplicate/concurrent payments cannot create txs without
+    # reducing outstanding (the Om Sai Grocery ₹500 drift case).
+    customer = SellerCustomer.objects.select_for_update().get(pk=customer.pk)
 
     if send_sms is None:
         send_sms = settings.NIMBUS_SMS_ENABLED
@@ -645,9 +652,56 @@ def use_advance(
     return tx
 
 
+def ledger_running_outstanding(customer):
+    """Outstanding implied by ledger rows (same math as statement running balance)."""
+    from django.db.models.functions import Coalesce
+
+    txs = LedgerTransaction.objects.filter(customer=customer).order_by(
+        Coalesce('device_created_at', 'created_at'),
+        'id',
+    )
+    outstanding = Decimal('0')
+    for tx in txs:
+        if tx.transaction_type == LedgerTransaction.TYPE_CREDIT:
+            outstanding += tx.amount
+        elif tx.transaction_type == LedgerTransaction.TYPE_PAYMENT:
+            outstanding = max(outstanding - tx.amount, Decimal('0'))
+    return outstanding
+
+
+@transaction.atomic
+def heal_outstanding_from_ledger(customer):
+    """
+    If stored outstanding drifted from ledger (e.g. concurrent payment race),
+    rewrite it from transaction history and mirror to linked customer account.
+    """
+    customer = SellerCustomer.objects.select_for_update().get(pk=customer.pk)
+    computed = ledger_running_outstanding(customer)
+    if customer.outstanding_amount == computed:
+        return customer, False
+
+    customer.outstanding_amount = computed
+    refresh_due_status(customer, save=False)
+    customer.save(update_fields=['outstanding_amount', 'status', 'next_due_date', 'updated_at'])
+
+    from customerapp.messaging import ensure_customer_account, link_seller_customer
+
+    customer_user = link_seller_customer(customer)
+    if customer_user:
+        account = ensure_customer_account(customer, customer_user)
+        account.outstanding_amount = customer.outstanding_amount
+        account.has_balance = customer.outstanding_amount > 0
+        account.save(update_fields=['outstanding_amount', 'has_balance', 'updated_at'])
+
+    return customer, True
+
+
 def customer_statement_report(customer):
     """Full ledger payload for PDF / share (running balance, wallet, totals)."""
     from django.db.models.functions import Coalesce
+
+    # Heal stale stored outstanding so list/reminders match the ledger too.
+    customer, _healed = heal_outstanding_from_ledger(customer)
 
     txs = LedgerTransaction.objects.filter(customer=customer).order_by(
         Coalesce('device_created_at', 'created_at'),
@@ -704,13 +758,15 @@ def customer_statement_report(customer):
     enriched.reverse()
 
     wallet = advance_summary(customer)
+    # Header must match ledger math (credits - payments / running balance), not a stale field.
+    outstanding = outstanding_running
     data = {
         'report': 'customer_statement',
         'customer': customer.name,
         'customer_name': customer.name,
         'phone': customer.phone,
-        'outstanding': float(customer.outstanding_amount),
-        'outstanding_display': format_inr(customer.outstanding_amount),
+        'outstanding': float(outstanding),
+        'outstanding_display': format_inr(outstanding),
         'wallet_balance': wallet['remaining'],
         'wallet_display': format_inr(wallet['remaining']),
         'advance': wallet,

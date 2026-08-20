@@ -91,6 +91,46 @@ class SmsPack(models.Model):
         return f'{self.name} — {self.sms_quantity} SMS @ {self.unit_price_paise}p'
 
 
+class ExcelReportAddonPlan(models.Model):
+    """Time-limited Excel-report add-on tiers offered to sellers.
+
+    Prices are GST-exclusive, as they are quoted in the seller app; the checkout
+    adds `gst_percent` on top. Editable here rather than hardcoded so pricing
+    can change without a deploy — `slug` is the key the seller app buys against,
+    so retire a tier with `is_active` instead of renaming its slug.
+    """
+
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(unique=True, max_length=100)
+    duration_days = models.PositiveIntegerField(help_text='Access granted per purchase')
+    price_inr = models.DecimalField(
+        max_digits=10, decimal_places=2, help_text='Exclusive of GST'
+    )
+    gst_percent = models.DecimalField(max_digits=5, decimal_places=2, default=18)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['sort_order', 'duration_days']
+
+    def __str__(self):
+        return f'{self.name} — Rs.{self.price_inr} / {self.duration_days}d'
+
+    @property
+    def gst_amount(self):
+        from decimal import Decimal, ROUND_HALF_UP
+
+        return (self.price_inr * self.gst_percent / Decimal('100')).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+
+    @property
+    def total_inr(self):
+        return self.price_inr + self.gst_amount
+
+
 class SellerSubscription(models.Model):
     STATUS_TRIAL = 'trial'
     STATUS_ACTIVE = 'active'
@@ -176,11 +216,43 @@ class SubscriptionInvoice(models.Model):
         (TAX_TYPE_IGST, 'IGST (inter-state)'),
     ]
 
+    KIND_SUBSCRIPTION = 'subscription'
+    KIND_ADDON_EXCEL = 'addon_excel'
+    KIND_ADDON_SMS = 'addon_sms'
+    KIND_CHOICES = [
+        (KIND_SUBSCRIPTION, 'Subscription'),
+        (KIND_ADDON_EXCEL, 'Excel report add-on'),
+        (KIND_ADDON_SMS, 'SMS pack'),
+    ]
+
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES, default=KIND_SUBSCRIPTION)
+    # Null for add-on invoices, which are not tied to a recurring subscription.
     subscription = models.ForeignKey(
         SellerSubscription,
         on_delete=models.CASCADE,
         related_name='invoices',
+        null=True,
+        blank=True,
     )
+    # Exactly one of these is set on an add-on invoice — the paid checkout it
+    # bills for. Both null on a subscription invoice.
+    addon_order = models.ForeignKey(
+        'sellerapp.SellerExcelReportOrder',
+        on_delete=models.SET_NULL,
+        related_name='invoices',
+        null=True,
+        blank=True,
+    )
+    sms_pack_order = models.ForeignKey(
+        'sellerapp.SellerSmsPackOrder',
+        on_delete=models.SET_NULL,
+        related_name='invoices',
+        null=True,
+        blank=True,
+    )
+    # Frozen label for the invoice line. A plan can be renamed or retired later;
+    # a raised invoice must keep saying what was actually sold.
+    plan_name = models.CharField(max_length=120, blank=True)
     seller = models.ForeignKey(
         'sellerapp.Seller',
         on_delete=models.CASCADE,
@@ -214,13 +286,76 @@ class SubscriptionInvoice(models.Model):
     period_end = models.DateTimeField()
     pdf_url = models.URLField(blank=True)
     emailed_at = models.DateTimeField(null=True, blank=True)
+
+    # Mirror of this invoice in the CRM finance module (crm.inwizy.com). CRM
+    # mints its own number on ingest; we keep it so the two ledgers can be
+    # reconciled from either side.
+    CRM_SYNC_PENDING = 'pending'
+    CRM_SYNC_SYNCED = 'synced'
+    CRM_SYNC_FAILED = 'failed'
+    CRM_SYNC_STATUS_CHOICES = [
+        (CRM_SYNC_PENDING, 'Pending'),
+        (CRM_SYNC_SYNCED, 'Synced'),
+        (CRM_SYNC_FAILED, 'Failed'),
+    ]
+    crm_invoice_no = models.CharField(max_length=50, blank=True)
+    crm_invoice_id = models.PositiveIntegerField(null=True, blank=True)
+    crm_sync_status = models.CharField(
+        max_length=20, choices=CRM_SYNC_STATUS_CHOICES, default=CRM_SYNC_PENDING
+    )
+    crm_synced_at = models.DateTimeField(null=True, blank=True)
+
+    # The money side of that mirror. The invoice push books the sale; this
+    # records the Receipt CRM mints when we tell it the invoice was collected,
+    # so a paid invoice shows under Finance > Payments/Receipts there and not
+    # just as a settled line on the invoice. INWIZY is one company, so the
+    # EazyUdhar collections belong in the same finance ledger as the rest.
+    crm_receipt_no = models.CharField(max_length=50, blank=True)
+    crm_receipt_id = models.PositiveIntegerField(null=True, blank=True)
+    crm_receipt_sync_status = models.CharField(
+        max_length=20, choices=CRM_SYNC_STATUS_CHOICES, default=CRM_SYNC_PENDING
+    )
+    crm_receipt_synced_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['-created_at']
 
     def __str__(self):
-        return self.invoice_number
+        return self.display_number
+
+    @property
+    def display_number(self):
+        """The number humans see — admin panel, PDF, invoice email. CRM finance
+        is the book of record for INWIZY billing, so its number wins once the
+        invoice has been ingested there. `invoice_number` stays as the local
+        reference and the idempotency key for the push, and is what shows until
+        (or unless) the sync succeeds."""
+        return self.crm_invoice_no or self.invoice_number
+
+    @property
+    def plan_label(self):
+        """What was sold, for the PDF line, the email and the CRM line item.
+        Subscription invoices read it off the live plan; add-on invoices carry
+        their own frozen copy."""
+        if self.plan_name:
+            return self.plan_name
+        if self.subscription_id:
+            return self.subscription.plan.name
+        return 'EazyUdhar service'
+
+    @property
+    def line_description(self):
+        if self.kind == self.KIND_ADDON_EXCEL:
+            return f'Excel report add-on — {self.plan_label}'
+        if self.kind == self.KIND_ADDON_SMS:
+            return f'SMS pack — {self.plan_label}'
+        return f'{self.plan_label} subscription'
+
+    @property
+    def currency(self):
+        return self.subscription.currency if self.subscription_id else 'INR'
 
 
 class PromoCode(models.Model):
@@ -338,6 +473,9 @@ class AdminAlert(models.Model):
     body = models.TextField()
     link = models.URLField(blank=True)
     read = models.BooleanField(default=False)
+    # Only set on TYPE_TELEGRAM_MESSAGE alerts, so clearing a chat can take its
+    # notifications with it instead of leaving them in the bell menu.
+    telegram_chat_id = models.BigIntegerField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -584,6 +722,7 @@ class TelegramMessage(models.Model):
     ]
 
     chat_id = models.BigIntegerField()
+    telegram_message_id = models.BigIntegerField(null=True, blank=True)
     telegram_user_id = models.BigIntegerField(null=True, blank=True)
     username = models.CharField(max_length=100, blank=True)
     first_name = models.CharField(max_length=150, blank=True)
@@ -599,6 +738,10 @@ class TelegramMessage(models.Model):
         related_name='telegram_replies_sent',
     )
     raw_update = models.JSONField(default=dict, blank=True)
+    # Set when an admin opens the thread in the panel. Only meaningful on
+    # incoming messages — Telegram's Bot API never tells us when the *customer*
+    # read ours, so outbound read state is inferred (see the admin view).
+    read_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

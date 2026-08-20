@@ -68,6 +68,19 @@ def seller_list_item(seller):
         'created_at': seller.created_at.isoformat(),
         'last_login_at': seller.last_login.isoformat() if seller.last_login else None,
         **_seller_payout_fields(seller),
+        **signup_location_fields(seller),
+    }
+
+
+def signup_location_fields(user):
+    """Where the account signed up from — same shape for sellers and customers."""
+    return {
+        'signup_location': user.signup_location or None,
+        'signup_city': user.signup_city or None,
+        'signup_region': user.signup_region or None,
+        'signup_country': user.signup_country or None,
+        'signup_ip': user.signup_ip or None,
+        'signup_location_source': user.signup_source or None,
     }
 
 
@@ -210,6 +223,7 @@ def customer_list_item(customer):
         'linked_shops': customer.accounts.count(),
         'status': _customer_status(customer),
         'created_at': customer.created_at.isoformat(),
+        **signup_location_fields(customer),
     }
 
 

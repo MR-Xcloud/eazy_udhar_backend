@@ -6,6 +6,7 @@ from customerapp.models import OTPRecord
 from sellerapp.models import ReminderLog, SellerSettings
 from sellerapp.reminders import send_customer_reminder
 
+from ..services import postmark_activity
 from ..services.data import reminder_log_item
 from ..utils import log_audit
 from .base import AdminAPIView
@@ -109,3 +110,34 @@ class OTPRecordListView(AdminAPIView):
         page, paginator = self.paginate(request, qs)
         data = [_otp_item(r) for r in page]
         return paginator.get_paginated_response(data)
+
+
+class EmailActivityView(AdminAPIView):
+    """Postmark delivery/open/click history for one recipient.
+
+    Read live from Postmark rather than a local mirror — Postmark is the system
+    of record for what happened to a message after we handed it over, and the
+    events (delivered, opened, clicked, bounced) only exist there.
+    """
+
+    def get(self, request):
+        email = (request.query_params.get('email') or '').strip()
+        if not email or '@' not in email:
+            return Response(
+                {'detail': 'A valid email address is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            count = int(request.query_params.get('count') or 25)
+        except (TypeError, ValueError):
+            count = 25
+        try:
+            data = postmark_activity.activity_for(email, count=count)
+        except postmark_activity.PostmarkError as exc:
+            return Response(
+                {'detail': str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY
+                if postmark_activity.configured()
+                else status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(data)

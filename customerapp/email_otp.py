@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 BRAND_FOOTER = 'EAZYUDHAR by INWIZY'
 INVOICE_BCC_EMAIL = 'admin@inwizy.com'
+# Admin-invited sellers: the welcome mail is copied here so the team has a record
+# of who was onboarded and with which temporary password.
+INVITE_CC_EMAIL = 'admin@inwizy.com'
 
 
 def postmark_configured():
@@ -52,7 +55,7 @@ def _otp_html_body(otp):
     return render_to_string('emails/otp_login.html', _otp_context(otp))
 
 
-def _send_via_postmark_api(*, to_email, subject, text_body, html_body, bcc_email=None):
+def _send_via_postmark_api(*, to_email, subject, text_body, html_body, bcc_email=None, cc_email=None):
     """Send a single email via Postmark HTTP API."""
     token = settings.POSTMARK_SERVER_TOKEN
     payload = {
@@ -65,6 +68,8 @@ def _send_via_postmark_api(*, to_email, subject, text_body, html_body, bcc_email
     }
     if bcc_email:
         payload['Bcc'] = bcc_email
+    if cc_email:
+        payload['Cc'] = cc_email
     req = urllib.request.Request(
         'https://api.postmarkapp.com/email',
         data=json.dumps(payload).encode(),
@@ -371,6 +376,140 @@ def send_invoice_email(
         }
     except Exception as exc:
         logger.warning('Invoice email failed to %s: %s', to_email, exc)
+        return {
+            'sent': False,
+            'channel': 'email',
+            'to': to_email,
+            'from': settings.DEFAULT_FROM_EMAIL,
+            'error': str(exc),
+        }
+
+
+def send_seller_invite_email(
+    *,
+    to_email,
+    business_name,
+    temp_password,
+    plan_name='',
+    trial_days=0,
+    trial_ends_on='',
+    product_name='EazyUdhar',
+    cc_email=INVITE_CC_EMAIL,
+):
+    """Welcome email for a seller created from the admin panel's Invite action.
+
+    Carries the login email and the temporary password, and is copied to the
+    admin address so the team keeps a record of the onboarding.
+    """
+    to_email = (to_email or '').strip().lower()
+    if not to_email or '@' not in to_email:
+        return {
+            'sent': False,
+            'channel': 'email',
+            'to': to_email,
+            'error': 'Valid email address is required.',
+            'from': settings.DEFAULT_FROM_EMAIL,
+        }
+
+    if not postmark_configured():
+        return {
+            'sent': False,
+            'channel': 'email',
+            'to': to_email,
+            'error': 'Email not configured (POSTMARK_SERVER_TOKEN / OTP_FROM_EMAIL).',
+            'from': settings.DEFAULT_FROM_EMAIL,
+        }
+
+    app_url = getattr(settings, 'SELLER_APP_URL', '')
+    support_email = getattr(settings, 'SUPPORT_EMAIL', 'support@eazyudhar.com')
+    business_name = (business_name or '').strip() or 'there'
+
+    subject = f'Welcome to {product_name} — your account is ready'
+    text_lines = [
+        f'Welcome, {business_name}!',
+        '',
+        f'An {product_name} account has been created for you.',
+        '',
+        'Your sign-in details',
+        f'  Email:    {to_email}',
+        f'  Password: {temp_password}',
+        '',
+    ]
+    if app_url:
+        text_lines += [f'Sign in here: {app_url}', '']
+    text_lines += [
+        'First steps:',
+        '  1. Sign in and change your password from Settings.',
+        '  2. Complete your shop profile - phone, address, GST and UPI.',
+        '  3. Add your customers and start recording udhar entries.',
+        '',
+    ]
+    if trial_days:
+        ends = f' until {trial_ends_on}' if trial_ends_on else ''
+        text_lines += [
+            f'Your {plan_name} free trial is active for {trial_days} days{ends}.',
+            '',
+        ]
+    text_lines += [
+        'Keep this password private and change it after your first sign-in.',
+        f'Need help? Write to {support_email}.',
+        '',
+        BRAND_FOOTER,
+    ]
+    text_body = '\n'.join(text_lines)
+
+    html_body = render_to_string('emails/seller_invite.html', {
+        'business_name': business_name,
+        'login_email': to_email,
+        'temp_password': temp_password,
+        'app_url': app_url,
+        'plan_name': plan_name,
+        'trial_days': trial_days,
+        'trial_ends_on': trial_ends_on,
+        'product_name': product_name,
+        'support_email': support_email,
+        'brand_footer': BRAND_FOOTER,
+        'logo_url': getattr(settings, 'OTP_EMAIL_LOGO_URL', ''),
+    })
+
+    try:
+        result = _send_via_postmark_api(
+            to_email=to_email,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+            cc_email=cc_email if cc_email and cc_email.lower() != to_email else None,
+        )
+        logger.info(
+            'Seller invite email sent to %s message_id=%s',
+            to_email,
+            result.get('MessageID'),
+        )
+        return {
+            'sent': True,
+            'channel': 'email',
+            'to': to_email,
+            'cc': cc_email or '',
+            'from': settings.DEFAULT_FROM_EMAIL,
+            'message_id': result.get('MessageID', ''),
+            'error': '',
+        }
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors='replace')
+        try:
+            detail = json.loads(body).get('Message', body)
+        except json.JSONDecodeError:
+            detail = body
+        logger.warning('Seller invite email failed to %s: %s', to_email, detail)
+        return {
+            'sent': False,
+            'channel': 'email',
+            'to': to_email,
+            'from': settings.DEFAULT_FROM_EMAIL,
+            'error': detail,
+        }
+    except Exception as exc:
+        logger.warning('Seller invite email failed to %s: %s', to_email, exc)
         return {
             'sent': False,
             'channel': 'email',

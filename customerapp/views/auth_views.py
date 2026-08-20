@@ -5,6 +5,8 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from easyudhar.signup_location import capture_signup_location
+
 from ..serializers import (
     ForgotPasswordSerializer,
     GoogleSignInSerializer,
@@ -25,6 +27,7 @@ class CustomerRegisterView(APIView):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        capture_signup_location(user, request)
         sync_customer_from_seller_ledgers(user)
         return Response(
             {

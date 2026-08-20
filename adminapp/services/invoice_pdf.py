@@ -30,6 +30,9 @@ def _invoices_dir() -> Path:
     return path
 
 
+# The file name stays on the local `invoice_number`: CRM numbers carry slashes
+# (IGVL/INV/2026-27/00002) and cannot be a path segment. Only the number printed
+# inside the document follows `display_number`.
 def invoice_pdf_path(invoice) -> Path:
     return _invoices_dir() / f'{invoice.invoice_number}.pdf'
 
@@ -60,7 +63,6 @@ def generate_invoice_pdf(invoice) -> Path:
     """Render `invoice` to a PDF on disk and return its path. Overwrites any
     existing file for this invoice number (e.g. on regeneration)."""
     seller = invoice.seller
-    sub = invoice.subscription
     total = invoice.amount + invoice.tax_amount
 
     out_path = invoice_pdf_path(invoice)
@@ -71,7 +73,7 @@ def generate_invoice_pdf(invoice) -> Path:
         bottomMargin=20 * mm,
         leftMargin=20 * mm,
         rightMargin=20 * mm,
-        title=invoice.invoice_number,
+        title=invoice.display_number,
     )
 
     styles = getSampleStyleSheet()
@@ -92,7 +94,7 @@ def generate_invoice_pdf(invoice) -> Path:
     header_table = Table(
         [[
             logo_cell,
-            Paragraph(f'<b>INVOICE</b><br/>{invoice.invoice_number}', title_style),
+            Paragraph(f'<b>INVOICE</b><br/>{invoice.display_number}', title_style),
         ]],
         colWidths=[90 * mm, 70 * mm],
     )
@@ -106,7 +108,15 @@ def generate_invoice_pdf(invoice) -> Path:
     method_label = invoice.get_payment_method_display()
     meta_rows = [
         ['Invoice date', invoice.created_at.strftime('%d %b %Y')],
-        ['Billing period', f'{sub.current_period_start:%d %b %Y} – {sub.current_period_end:%d %b %Y}'],
+    ]
+    # An SMS pack is a one-off top-up with no period to state; subscriptions and
+    # the time-limited Excel add-on both bill for a window.
+    if invoice.period_end > invoice.period_start:
+        meta_rows.append([
+            'Billing period' if invoice.kind == invoice.KIND_SUBSCRIPTION else 'Access period',
+            f'{invoice.period_start:%d %b %Y} – {invoice.period_end:%d %b %Y}',
+        ])
+    meta_rows += [
         ['Status', status_label],
         ['Payment method', method_label],
     ]
@@ -145,7 +155,7 @@ def generate_invoice_pdf(invoice) -> Path:
 
     line_rows = [
         ['Description', 'Amount'],
-        [f'{sub.plan.name} subscription', f'Rs. {invoice.amount:,.2f}'],
+        [invoice.line_description, f'Rs. {invoice.amount:,.2f}'],
     ]
     for line in tax_line_items(invoice):
         line_rows.append([line['label'], f"Rs. {line['amount']:,.2f}"])
@@ -193,12 +203,40 @@ def generate_invoice_pdf(invoice) -> Path:
     return out_path
 
 
-def ensure_invoice_pdf(invoice) -> str:
-    """Generate the PDF if missing and return the public URL, persisting it
-    onto `invoice.pdf_url` if it changed."""
+def write_invoice_pdf(invoice) -> Path:
+    """Put the invoice's PDF on disk and return its path.
+
+    CRM finance is the book of record, so once an invoice is booked there its
+    document is CRM's — fetched and cached here, INWIZY letterhead and all, so
+    the admin panel, the emailed /media/ link and the CRM ledger all hand out
+    one identical file. The local ReportLab rendering is the fallback for
+    invoices that have not reached CRM (a draft, or a sync still pending)."""
+    from .crm_invoice_pdf import fetch_crm_invoice_pdf
+
+    data = fetch_crm_invoice_pdf(invoice)
+    if data:
+        out_path = invoice_pdf_path(invoice)
+        out_path.write_bytes(data)
+        return out_path
+    return generate_invoice_pdf(invoice)
+
+
+def _is_stale(invoice, path) -> bool:
+    """True when the cached file predates the CRM sync — i.e. it is the local
+    rendering with the local number, written before CRM had booked the invoice.
+    Without this, an invoice that synced after its PDF was made would keep
+    serving the superseded document forever."""
+    if not invoice.crm_invoice_no or not invoice.crm_synced_at:
+        return False
+    return path.stat().st_mtime < invoice.crm_synced_at.timestamp()
+
+
+def ensure_invoice_pdf(invoice, *, refresh=False) -> str:
+    """Write the PDF if missing, stale or `refresh`, and return the public URL,
+    persisting it onto `invoice.pdf_url` if it changed."""
     path = invoice_pdf_path(invoice)
-    if not path.exists():
-        generate_invoice_pdf(invoice)
+    if refresh or not path.exists() or _is_stale(invoice, path):
+        write_invoice_pdf(invoice)
     url = invoice_pdf_url(invoice)
     if invoice.pdf_url != url:
         invoice.pdf_url = url

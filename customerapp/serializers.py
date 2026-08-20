@@ -1,7 +1,6 @@
 import random
 from datetime import timedelta
 
-from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
 from rest_framework import serializers
@@ -74,12 +73,15 @@ class LoginSerializer(serializers.Serializer):
     def validate(self, attrs):
         email = attrs['email']
         password = attrs['password']
-        user = authenticate(
-            self.context['request'],
-            username=email,
-            password=password,
-        )
-        if user is None:
+        # Look up by email directly rather than django.contrib.auth.authenticate():
+        # Customer.USERNAME_FIELD is 'username' (AbstractUser default), so passing
+        # email as the `username` kwarg only worked by coincidence for accounts
+        # where username == email — it silently rejected everyone else.
+        try:
+            user = Customer.objects.get(email__iexact=email)
+        except Customer.DoesNotExist:
+            user = None
+        if user is None or not user.check_password(password) or not user.is_active:
             raise serializers.ValidationError('Invalid credentials.')
         attrs['user'] = user
         return attrs

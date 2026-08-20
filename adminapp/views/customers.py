@@ -42,6 +42,7 @@ def _filter_customers(request):
             | Q(email__icontains=search)
             | Q(phone__icontains=search)
             | Q(username__icontains=search)
+            | Q(signup_city__icontains=search)
         )
     status_param = request.query_params.get('status')
     if status_param == 'active':
@@ -75,12 +76,17 @@ class CustomerExportView(AdminAPIView):
                     item['linked_shops'],
                     item['status'],
                     item['created_at'],
+                    item['signup_location'] or '',
+                    item['signup_ip'] or '',
                 ]
             )
         return csv_response(
             'customers.csv',
             rows,
-            ['id', 'full_name', 'email', 'phone', 'promo_code', 'linked_shops', 'status', 'created_at'],
+            [
+                'id', 'full_name', 'email', 'phone', 'promo_code', 'linked_shops',
+                'status', 'created_at', 'signup_location', 'signup_ip',
+            ],
         )
 
 
@@ -164,6 +170,11 @@ class CustomerDetailView(AdminAPIView):
                 )
             customer.email = email
             update_fields.append('email')
+            # Keep username mirroring email (registration always sets them equal) —
+            # a stale username here is what silently broke login for customer #4.
+            if customer.username != email:
+                customer.username = email
+                update_fields.append('username')
 
         if update_fields:
             update_fields.append('updated_at')
